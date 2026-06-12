@@ -26,17 +26,22 @@ export const CLIMATE = {
     },
   },
   internal: {
-    h: 7.69, // 1/R_si, R_si = 0.13 m²K/W
+    h: 1 / 0.13, // 1/R_si, R_si = 0.13 m²K/W exactly — G1.1 compares at 1e-6 K
     T: { mean: 20, harmonics: [] },
   },
 };
 
 /** Default wall build-up, exterior → interior. */
-const DEFAULT_LAYERS = [
+export const DEFAULT_LAYERS = [
   { material: 'eps', thickness: 0.16 },
   { material: 'brick', thickness: 0.24 },
   { material: 'plaster', thickness: 0.015 },
 ];
+
+/** Default layers with the insulation (eps) thickness replaced — UI slider. */
+export function layersWithInsulation(thickness) {
+  return DEFAULT_LAYERS.map((l) => (l.material === 'eps' ? { ...l, thickness } : l));
+}
 
 /**
  * `wall1d` — multilayer wall as a thin 3D slab; adiabatic lateral faces make
@@ -113,6 +118,9 @@ export function corner2d({ layers = DEFAULT_LAYERS, flank = 1.0, depth = 1.0 } =
       z: { mandatory: [0, depth], maxH: 0.15 },
     },
     extent: { x: [0, len], y: [0, len], z: [0, depth] },
+    // ψ-value inputs (external-dimension convention, CLAUDE.md M1):
+    // leg lengths over the outside faces, extrusion length, wall build-up for U
+    psiSpec: { lengths: [len, len], Lz: depth, layers },
   };
 }
 

@@ -30,7 +30,17 @@
      mid-rotate (shows the not-allowed cursor and stalls OrbitControls) */
   #view canvas { touch-action: none; -webkit-user-drag: none; display: block; }
   #slices { grid-area: slices; background: var(--panel); border-radius: 6px;
-    display: flex; align-items: center; justify-content: center; color: #5a6068; }
+    display: flex; flex-direction: column; gap: 6px; padding: 10px; min-height: 0; }
+  .slice-header { color: #8a919a; font-size: 12px; }
+  .slice-canvas { flex: 1 1 auto; min-height: 120px; width: 100%; }
+  .slice-bar-row { display: flex; gap: 8px; align-items: center; }
+  .slice-bar { flex: 1 1 auto; height: 10px; border-radius: 3px; }
+  .slice-bar-label { font-size: 11px; color: #8a919a; min-width: 52px;
+    font-variant-numeric: tabular-nums; }
+  .slice-note { font-size: 11px; color: var(--accent); min-height: 14px; }
+  #readouts { font-size: 12px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+  #readouts .bad { color: #e0533d; font-weight: 600; }
+  #readouts .ok { color: #7dba6a; }
   #scrub { grid-area: scrub; background: var(--panel); border-radius: 6px;
     display: flex; align-items: center; padding: 0 16px; color: #5a6068; gap: 16px; }
   #status { position: absolute; left: 10px; bottom: 8px; color: var(--accent);
@@ -48,35 +58,111 @@
 </head>
 <body>
   <div id="view"><div id="status"></div></div>
-  <div id="slices">slice panels — M1</div>
+  <div id="slices"></div>
   <div id="scrub">time scrubber — M2</div>
 
 <script type="module">
 import { buildGrid, paintBoxes } from './src/grid.mjs';
-import { MATERIALS, presets } from './src/model.mjs';
+import { MATERIALS, presets, layersWithInsulation } from './src/model.mjs';
 import { Viz3D } from './src/viz3d.mjs';
+import { SlicePanel } from './src/viz2d.mjs';
 import { buildUI } from './src/ui.mjs';
 
 const viz = new Viz3D(document.getElementById('view'));
 const status = document.getElementById('status');
+const slicesEl = document.getElementById('slices');
+const slices = new SlicePanel(slicesEl);
+const readouts = document.createElement('div');
+readouts.id = 'readouts';
+slicesEl.appendChild(readouts);
 
-function loadPreset(name) {
-  const preset = presets[name]();
+let current = null; // { name, params }
+let seq = 0;        // solve sequence — bumping it invalidates in-flight results
+
+function loadPreset(name, params = {}) {
+  const preset = presets[name](params);
   const grid = buildGrid(preset.gridSpec);
   const painted = paintBoxes(grid, preset.boxes, preset.background);
   viz.showModel(grid, painted, MATERIALS, preset.background, preset.extent);
+  slices.setModel({ grid, painted, materials: MATERIALS });
+  current = { name, params };
   status.textContent =
     `${name} — ${grid.nx}×${grid.ny}×${grid.nz} = ${grid.nx * grid.ny * grid.nz} cells`;
-  return preset;
+}
+
+const worker = new Worker('./src/worker.mjs', { type: 'module' });
+
+function solve() {
+  const id = ++seq;
+  readouts.innerHTML = '';
+  status.textContent = 'solving…';
+  worker.postMessage({ id, presetName: current.name, params: current.params, tol: 1e-10 });
+}
+
+function invalidate(message) {
+  seq++; // any in-flight result is now stale
+  slices.clearField(message);
+  readouts.innerHTML = '';
+}
+
+worker.onmessage = (e) => {
+  const m = e.data;
+  if (m.id !== seq) return; // stale result for an old geometry
+  if (m.type === 'progress') {
+    status.textContent = `CG iteration ${m.iter} — rel. residual ${m.relRes.toExponential(1)}`;
+  } else if (m.type === 'error') {
+    status.textContent = `Solver error: ${m.message} — refine the grid or report this`;
+  } else if (m.type === 'result') {
+    slices.setField(new Float64Array(m.T));
+    renderReadouts(m.readouts);
+    status.textContent = `solved — ${m.stats.cells} cells, CG ${m.stats.iterations} it, ` +
+      `rel. residual ${m.stats.relRes.toExponential(1)}`;
+  }
+};
+worker.onerror = (e) => {
+  status.textContent = `Worker failed: ${e.message ?? 'see console'}`;
+};
+
+function fmt(v, digits = 3) {
+  return Number.isFinite(v) ? v.toFixed(digits) : '—';
+}
+
+function renderReadouts(r) {
+  const mold = r.fRsi < 0.70;
+  const fLine =
+    `f_Rsi (R_si = ${r.RsiUsed} m²K/W) = <span class="${mold ? 'bad' : 'ok'}">${fmt(r.fRsi, 3)}</span> ` +
+    (mold ? '✗ &lt; 0.70 — mold risk' : '✓ ≥ 0.70') +
+    ` · θ_si,min = ${fmt(r.thetaSiMin25, 2)} °C`;
+  const psiLine = r.psi
+    ? `ψ = ${fmt(r.psi.psi, 4)} W/(m·K) — external dimensions · ` +
+      `U = ${fmt(r.U, 3)} W/(m²K) · L₂D = ${fmt(r.L2D, 4)} W/(m·K)`
+    : 'ψ — only for extruded junction presets (corner2d)';
+  const phiLine = `Φ_exterior = ${fmt(Math.abs(r.phi.exterior ?? NaN), 3)} W ` +
+    `(${fmt(r.Ti, 0)} °C inside / ${fmt(r.Te, 0)} °C outside)`;
+  readouts.innerHTML = `${fLine}<br>${psiLine}<br>${phiLine}`;
 }
 
 const ui = buildUI(Object.keys(presets), {
-  onPreset: (name) => { loadPreset(name); viz.setClip(ui.clipAxis, ui.clipPosition); },
+  onPreset: (name) => {
+    loadPreset(name, { layers: layersWithInsulation(ui.insulation) });
+    viz.setClip(ui.clipAxis, ui.clipPosition);
+    invalidate('');
+    solve();
+  },
   onClip: (axis, frac) => viz.setClip(axis, frac),
+  onInsulation: (t) => {
+    loadPreset(current.name, { layers: layersWithInsulation(t) });
+    viz.setClip(ui.clipAxis, ui.clipPosition);
+    invalidate('geometry changed — press Solve');
+  },
+  onSlice: (frac) => slices.setSlice(frac),
+  onSolve: () => solve(),
 });
 
-loadPreset(ui.preset);
-window.__phasor = { viz, loadPreset, ui }; // debug handle (console / tests)
+loadPreset(ui.preset, { layers: layersWithInsulation(ui.insulation) });
+slices.setSlice(ui.sliceZ);
+solve();
+window.__phasor = { viz, slices, loadPreset, solve, ui }; // debug handle (console / tests)
 </script>
 </body>
 </html>

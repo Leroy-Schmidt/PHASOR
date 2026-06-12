@@ -8,7 +8,8 @@ export class Viz3D {
   /** @param {HTMLElement} container */
   constructor(container) {
     this.container = container;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // preserveDrawingBuffer: canvas stays readable after render (PNG export, M4)
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     this.renderer.localClippingEnabled = true;
     this.renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(this.renderer.domElement);
@@ -27,20 +28,21 @@ export class Viz3D {
     this.group = null;
     this.extent = null;
 
+    // render on demand: redraw only on camera moves, resizes, model changes
+    this.render = () => this.renderer.render(this.scene, this.camera);
+    this.controls.addEventListener('change', this.render);
+
     const resize = () => {
       const w = container.clientWidth;
       const h = container.clientHeight;
+      if (w === 0 || h === 0) return;
       this.renderer.setSize(w, h);
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
+      this.render();
     };
     new ResizeObserver(resize).observe(container);
     resize();
-
-    this.renderer.setAnimationLoop(() => {
-      this.controls.update();
-      this.renderer.render(this.scene, this.camera);
-    });
   }
 
   /**
@@ -102,6 +104,7 @@ export class Viz3D {
     }
     this.scene.add(this.group);
     this.frame(extent);
+    this.render();
   }
 
   /** Aim the camera at the model bounds (only on preset change). */
@@ -134,5 +137,6 @@ export class Viz3D {
     this.clipPlane.normal.set(...n);
     // keep points with normal·p + constant >= 0, i.e. coordinate <= pos
     this.clipPlane.constant = frac >= 1 ? 1e6 : pos;
+    this.render();
   }
 }

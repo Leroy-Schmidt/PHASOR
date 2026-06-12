@@ -12,10 +12,17 @@
     background: var(--bg); color: var(--text);
     font: 14px/1.4 system-ui, sans-serif;
     display: grid;
-    grid-template-columns: 1fr 360px;
-    grid-template-rows: 1fr 64px;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-rows: minmax(0, 1fr) 64px;
     grid-template-areas: "view slices" "scrub scrub";
     gap: 8px; padding: 8px;
+  }
+  @media (max-width: 900px) {
+    body {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 2fr) minmax(0, 1fr) 64px;
+      grid-template-areas: "view" "slices" "scrub";
+    }
   }
   #view { grid-area: view; background: var(--panel); border-radius: 6px; overflow: hidden; position: relative; }
   #slices { grid-area: slices; background: var(--panel); border-radius: 6px;
@@ -65,6 +72,7 @@ const ui = buildUI(Object.keys(presets), {
 });
 
 loadPreset(ui.preset);
+window.__phasor = { viz, loadPreset, ui }; // debug handle (console / tests)
 </script>
 </body>
 </html>

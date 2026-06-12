@@ -24,7 +24,11 @@
       grid-template-areas: "view" "slices" "scrub";
     }
   }
-  #view { grid-area: view; background: var(--panel); border-radius: 6px; overflow: hidden; position: relative; }
+  #view { grid-area: view; background: var(--panel); border-radius: 6px; overflow: hidden; position: relative;
+    user-select: none; -webkit-user-select: none; }
+  /* stop the browser from starting a native drag / text-select on the canvas
+     mid-rotate (shows the not-allowed cursor and stalls OrbitControls) */
+  #view canvas { touch-action: none; -webkit-user-drag: none; display: block; }
   #slices { grid-area: slices; background: var(--panel); border-radius: 6px;
     display: flex; align-items: center; justify-content: center; color: #5a6068; }
   #scrub { grid-area: scrub; background: var(--panel); border-radius: 6px;

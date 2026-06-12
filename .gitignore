@@ -1,0 +1,11 @@
+# OS noise
+Thumbs.db
+.DS_Store
+
+# editor
+.vscode/
+.idea/
+
+# python scratch (tools/ oracle may grow a venv)
+__pycache__/
+.venv/

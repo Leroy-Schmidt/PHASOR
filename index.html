@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PHASOR</title>
+<style>
+  :root { --accent: #e8a33d; --bg: #0e1013; --panel: #14161a; --text: #cfd3d8; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, sans-serif;
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    grid-template-rows: 1fr 64px;
+    grid-template-areas: "view slices" "scrub scrub";
+    gap: 8px; padding: 8px;
+  }
+  #view { grid-area: view; background: var(--panel); border-radius: 6px; overflow: hidden; position: relative; }
+  #slices { grid-area: slices; background: var(--panel); border-radius: 6px;
+    display: flex; align-items: center; justify-content: center; color: #5a6068; }
+  #scrub { grid-area: scrub; background: var(--panel); border-radius: 6px;
+    display: flex; align-items: center; padding: 0 16px; color: #5a6068; gap: 16px; }
+  #status { position: absolute; left: 10px; bottom: 8px; color: var(--accent);
+    font-variant-numeric: tabular-nums; pointer-events: none; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.esm.min.js"
+  }
+}
+</script>
+</head>
+<body>
+  <div id="view"><div id="status"></div></div>
+  <div id="slices">slice panels — M1</div>
+  <div id="scrub">time scrubber — M2</div>
+
+<script type="module">
+import { buildGrid, paintBoxes } from './src/grid.mjs';
+import { MATERIALS, presets } from './src/model.mjs';
+import { Viz3D } from './src/viz3d.mjs';
+import { buildUI } from './src/ui.mjs';
+
+const viz = new Viz3D(document.getElementById('view'));
+const status = document.getElementById('status');
+
+function loadPreset(name) {
+  const preset = presets[name]();
+  const grid = buildGrid(preset.gridSpec);
+  const painted = paintBoxes(grid, preset.boxes, preset.background);
+  viz.showModel(grid, painted, MATERIALS, preset.background, preset.extent);
+  status.textContent =
+    `${name} — ${grid.nx}×${grid.ny}×${grid.nz} = ${grid.nx * grid.ny * grid.nz} cells`;
+  return preset;
+}
+
+const ui = buildUI(Object.keys(presets), {
+  onPreset: (name) => { loadPreset(name); viz.setClip(ui.clipAxis, ui.clipPosition); },
+  onClip: (axis, frac) => viz.setClip(axis, frac),
+});
+
+loadPreset(ui.preset);
+</script>
+</body>
+</html>

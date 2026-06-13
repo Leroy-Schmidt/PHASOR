@@ -32,17 +32,30 @@ export class Viz3D {
     this.render = () => this.renderer.render(this.scene, this.camera);
     this.controls.addEventListener('change', this.render);
 
+    this._sized = false;
     const resize = () => {
       const w = container.clientWidth;
       const h = container.clientHeight;
       if (w === 0 || h === 0) return;
+      this._sized = true;
       this.renderer.setSize(w, h);
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
       this.render();
     };
+    this.resize = resize;
+    // ResizeObserver alone is fragile: if the viewport is first laid out at 0×0
+    // (tab restored, DevTools toggled, tiling WM) its callback can be missed and
+    // the canvas stays at the three.js default — a black viewport. Back it with
+    // a window-resize listener and a short rAF kick until the first real size.
     new ResizeObserver(resize).observe(container);
-    resize();
+    window.addEventListener('resize', resize);
+    let kicks = 120;
+    const kick = () => {
+      resize();
+      if (!this._sized && kicks-- > 0) requestAnimationFrame(kick);
+    };
+    kick();
   }
 
   /**
@@ -104,7 +117,9 @@ export class Viz3D {
     }
     this.scene.add(this.group);
     this.frame(extent);
-    this.render();
+    // resize() renders at the correct size; if the container isn't sized yet
+    // the constructor's rAF kick will render this model once it is.
+    this.resize();
   }
 
   /** Aim the camera at the model bounds (only on preset change). */

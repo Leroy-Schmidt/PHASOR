@@ -66,15 +66,30 @@ export class SlicePanel {
     this.T = null;     // nodal Float64Array
     this.range = null; // [min, max] over solid-cell nodes
     this.frac = 0.5;   // slice position along z, fraction of extent
+    this._sized = false; // has the canvas ever rendered at a real size?
 
-    new ResizeObserver(() => this.render()).observe(this.canvas);
+    // Rendering triggers. ResizeObserver alone is not enough: if the panel is
+    // first laid out at 0×0 (tab restored, DevTools open then closed, tiling
+    // WM, a collapsed flex item) its callback can be missed, leaving the canvas
+    // at its default size and blank. Back it with a window-resize listener and
+    // a short rAF kick that retries until the canvas first gets a real size.
+    new ResizeObserver(() => this.requestRender()).observe(this.canvas);
+    window.addEventListener('resize', () => this.requestRender());
+  }
+
+  /** Render now; if the canvas has no size yet, keep retrying on frames. */
+  requestRender(framesLeft = 120) {
+    this.render();
+    if (!this._sized && framesLeft > 0) {
+      requestAnimationFrame(() => this.requestRender(framesLeft - 1));
+    }
   }
 
   setModel(model) {
     this.model = model;
     this.T = null;
     this.range = null;
-    this.render();
+    this.requestRender();
   }
 
   /** @param {Float64Array} T nodal field for the CURRENT model's grid */
@@ -97,19 +112,19 @@ export class SlicePanel {
     }
     this.range = hi > lo ? [lo, hi] : [lo - 0.5, lo + 0.5];
     this.note.textContent = '';
-    this.render();
+    this.requestRender();
   }
 
   clearField(message = '') {
     this.T = null;
     this.range = null;
     this.note.textContent = message;
-    this.render();
+    this.requestRender();
   }
 
   setSlice(frac) {
     this.frac = Math.min(1, Math.max(0, frac));
-    this.render();
+    this.requestRender();
   }
 
   render() {
@@ -119,6 +134,7 @@ export class SlicePanel {
     const W = Math.round(this.canvas.clientWidth * dpr);
     const H = Math.round(this.canvas.clientHeight * dpr);
     if (W === 0 || H === 0) return;
+    this._sized = true; // a real size reached — the rAF kick can stand down
     this.canvas.width = W;
     this.canvas.height = H;
     const ctx = this.canvas.getContext('2d');

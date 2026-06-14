@@ -124,4 +124,39 @@ export function corner2d({ layers = DEFAULT_LAYERS, flank = 1.0, depth = 1.0 } =
   };
 }
 
-export const presets = { wall1d, corner2d };
+/**
+ * `soil_rod` — a tall column of soil with the exterior climate forcing on the
+ * top face, a deep far-field Dirichlet at the mean annual temperature, and
+ * adiabatic sides. Single material, 1-D by construction: the textbook
+ * semi-infinite solid for *seeing* the periodic penetration depth — amplitude
+ * decays e^{−y/δ}, phase lags y/δ, the annual wave reaches metres down while
+ * the diurnal wave dies in the top ~15 cm. Depth y runs upward: surface at
+ * y = depth (top of the 2-D panel), deep end (Dirichlet) at y = 0.
+ *
+ * Off-script teaching/validation preset (not in DESIGN §5.1) — Operator
+ * decision 2026-06-14; the 1-D sanity sibling of the M3 `basement`.
+ * `maxH` 0.04 m resolves both the annual (~70 cells/δ) and diurnal (~3.7
+ * cells/δ) waves; the deep Dirichlet harmonic part is T̂=0 (DESIGN §2.2),
+ * which solveHarmonic imposes by default.
+ */
+export function soil_rod({ depth = 10, width = 3, maxH = 0.04 } = {}) {
+  const thin = 0.1;
+  return {
+    name: 'soil_rod',
+    boxes: [{ name: 'soil', x: [0, width], y: [0, depth], z: [0, thin], material: 'soil' }],
+    background: 'air',
+    bcs: [
+      { name: 'exterior', select: { axis: 'y', side: 'max' }, type: 'robin', ...CLIMATE.external },
+      { name: 'deep', select: { axis: 'y', side: 'min' }, type: 'dirichlet', value: CLIMATE.external.T.mean },
+      { name: 'cuts', select: 'rest', type: 'adiabatic' },
+    ],
+    gridSpec: {
+      x: { mandatory: [0, width], maxH: width / 3, minCells: 3 },
+      y: { mandatory: [0, depth], maxH, minCells: 4 },
+      z: { mandatory: [0, thin], maxH: thin / 2, minCells: 2 },
+    },
+    extent: { x: [0, width], y: [0, depth], z: [0, thin] },
+  };
+}
+
+export const presets = { wall1d, corner2d, soil_rod };

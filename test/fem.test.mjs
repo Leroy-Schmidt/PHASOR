@@ -9,13 +9,17 @@ import { buildGrid, paintBoxes, nodeIndex } from '../src/grid.mjs';
 import { MATERIALS, wall1d, corner2d } from '../src/model.mjs';
 import {
   elementK,
+  elementC,
   faceMass,
   assemble,
   applyA,
+  applyAComplex,
+  assembleHarmonicLoad,
   boundaryFlux,
   regionNodes,
 } from '../src/fem.mjs';
 import { cg } from '../src/solver.mjs';
+import { OMEGA_DIURNAL } from '../src/physics.mjs';
 
 // ---------------------------------------------------------------- helpers
 
@@ -329,4 +333,170 @@ test('boundaryFlux exposes per-region flux with signs (out of the solid positive
   // exterior surface at T=9 equals ambient 9 → zero; interior at 20 equals ambient → zero
   assert.ok(Math.abs(byRegion.exterior) < 1e-12, 'exterior flux zero when T=ambient');
   assert.ok(Math.abs(byRegion.interior) < 1e-12, 'interior flux zero when T=ambient');
+});
+
+// ====================================================================
+// M2 primitives (DESIGN §3.2–§3.3) — written BEFORE the harmonic code.
+// ====================================================================
+
+/** ∫ ρc N_a N_b dV on an hx×hy×hz box via 2×2×2 Gauss (exact for trilinear). */
+function quadratureElementC(hx, hy, hz, rhoc) {
+  const g = 1 / Math.sqrt(3);
+  const C = new Float64Array(64);
+  const J = (hx * hy * hz) / 8;
+  const sign = (a, bit) => (((a >> bit) & 1) ? 1 : -1);
+  for (const xi of [-g, g]) {
+    for (const eta of [-g, g]) {
+      for (const zeta of [-g, g]) {
+        const N = [];
+        for (let a = 0; a < 8; a++) {
+          N.push(((1 + sign(a, 0) * xi) * (1 + sign(a, 1) * eta) * (1 + sign(a, 2) * zeta)) / 8);
+        }
+        for (let a = 0; a < 8; a++) {
+          for (let b = 0; b < 8; b++) C[a * 8 + b] += rhoc * J * N[a] * N[b];
+        }
+      }
+    }
+  }
+  return C;
+}
+
+test('elementC (consistent mass) matches direct Gauss quadrature', () => {
+  const cases = [
+    [1, 1, 1, 1],
+    [0.025, 0.05, 0.1, 2.4e6],
+    [0.003, 0.2, 0.01, 2.9e4],
+  ];
+  for (const [hx, hy, hz, rhoc] of cases) {
+    const C = elementC(hx, hy, hz, rhoc);
+    const Q = quadratureElementC(hx, hy, hz, rhoc);
+    const scale = maxAbs(Q);
+    for (let i = 0; i < 64; i++) {
+      assert.ok(Math.abs(C[i] - Q[i]) <= 1e-12 * scale,
+        `C[${i}] = ${C[i]} vs quadrature ${Q[i]} (h=${hx},${hy},${hz})`);
+    }
+    // total mass conserved: Σ_ab C = ρc·V; each row sums to ρc·V/8
+    let total = 0;
+    for (let a = 0; a < 8; a++) {
+      let row = 0;
+      for (let b = 0; b < 8; b++) { row += C[a * 8 + b]; total += C[a * 8 + b]; }
+      assert.ok(Math.abs(row - (rhoc * hx * hy * hz) / 8) <= 1e-9 * scale, `row ${a} mass`);
+    }
+    assert.ok(Math.abs(total - rhoc * hx * hy * hz) <= 1e-9 * Math.max(scale, 1), 'total mass');
+  }
+});
+
+const harmMaterials = { concrete: { lambda: 2.1, rho: 2400, c: 1000 } };
+
+function harmBox() {
+  return {
+    boxes: [{ name: 'b', x: [0, 0.2], y: [0, 0.2], z: [0, 0.2], material: 'concrete' }],
+    background: 'air',
+    bcs: [
+      { name: 'exterior', select: { axis: 'x', side: 'min' }, type: 'robin', h: 25, T: { mean: 0 } },
+      { name: 'interior', select: 'rest', type: 'robin', h: 7.7, T: { mean: 0 } },
+    ],
+    gridSpec: {
+      x: { mandatory: [0, 0.2], maxH: 0.05, minCells: 2 },
+      y: { mandatory: [0, 0.2], maxH: 0.05, minCells: 2 },
+      z: { mandatory: [0, 0.2], maxH: 0.05, minCells: 2 },
+    },
+  };
+}
+
+test('assemble stashes ρc per solid cell (zero for void)', () => {
+  const grid = buildGrid(harmBox().gridSpec);
+  const painted = paintBoxes(grid, harmBox().boxes, 'air');
+  const problem = assemble(grid, painted, harmMaterials, harmBox().bcs);
+  assert.ok(problem.cellRhoC, 'cellRhoC present');
+  let solid = 0;
+  for (let c = 0; c < problem.cellRhoC.length; c++) {
+    if (problem.cellLambda[c] > 0) {
+      solid++;
+      assert.equal(problem.cellRhoC[c], 2400 * 1000, 'ρc = ρ·c on solid cells');
+    } else {
+      assert.equal(problem.cellRhoC[c], 0, 'void cells carry no capacity');
+    }
+  }
+  assert.ok(solid > 0, 'box has solid cells');
+});
+
+test('applyAComplex is complex-symmetric in the unconjugated form ⟨Ax,y⟩ = ⟨x,Ay⟩', () => {
+  const grid = buildGrid(harmBox().gridSpec);
+  const painted = paintBoxes(grid, harmBox().boxes, 'air');
+  const problem = assemble(grid, painted, harmMaterials, harmBox().bcs);
+  const n = problem.nNodes;
+  const omega = OMEGA_DIURNAL;
+
+  let s = 7;
+  const rand = () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff - 0.5;
+  const xRe = new Float64Array(n);
+  const xIm = new Float64Array(n);
+  const yRe = new Float64Array(n);
+  const yIm = new Float64Array(n);
+  for (let i = 0; i < n; i++) { xRe[i] = rand(); xIm[i] = rand(); yRe[i] = rand(); yIm[i] = rand(); }
+
+  const AxRe = new Float64Array(n);
+  const AxIm = new Float64Array(n);
+  const AyRe = new Float64Array(n);
+  const AyIm = new Float64Array(n);
+  applyAComplex(problem, omega, xRe, xIm, AxRe, AxIm);
+  applyAComplex(problem, omega, yRe, yIm, AyRe, AyIm);
+
+  // unconjugated complex bilinear form ⟨u,v⟩ = Σ u_i v_i
+  const cdot = (uRe, uIm, vRe, vIm) => {
+    let re = 0;
+    let im = 0;
+    for (let i = 0; i < n; i++) {
+      re += uRe[i] * vRe[i] - uIm[i] * vIm[i];
+      im += uRe[i] * vIm[i] + uIm[i] * vRe[i];
+    }
+    return [re, im];
+  };
+  const [lRe, lIm] = cdot(AxRe, AxIm, yRe, yIm);
+  const [rRe, rIm] = cdot(xRe, xIm, AyRe, AyIm);
+  const scale = Math.max(Math.abs(lRe), Math.abs(lIm), 1);
+  assert.ok(Math.abs(lRe - rRe) <= 1e-9 * scale, `re asymmetry ${lRe} vs ${rRe}`);
+  assert.ok(Math.abs(lIm - rIm) <= 1e-9 * scale, `im asymmetry ${lIm} vs ${rIm}`);
+});
+
+test('applyAComplex reduces to the real steady operator at ω = 0', () => {
+  const grid = buildGrid(harmBox().gridSpec);
+  const painted = paintBoxes(grid, harmBox().boxes, 'air');
+  const problem = assemble(grid, painted, harmMaterials, harmBox().bcs);
+  const n = problem.nNodes;
+  let s = 3;
+  const rand = () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff - 0.5;
+  const x = new Float64Array(n);
+  for (let i = 0; i < n; i++) x[i] = rand();
+
+  const ySteady = new Float64Array(n);
+  applyA(problem, x, ySteady);
+  const yRe = new Float64Array(n);
+  const yIm = new Float64Array(n);
+  const zeroIm = new Float64Array(n);
+  applyAComplex(problem, 0, x, zeroIm, yRe, yIm);
+  for (let i = 0; i < n; i++) {
+    assert.ok(Math.abs(yRe[i] - ySteady[i]) <= 1e-12 * (Math.abs(ySteady[i]) + 1),
+      `ω=0 real part differs at ${i}`);
+    assert.equal(yIm[i], 0, `ω=0 imaginary part nonzero at ${i}`);
+  }
+});
+
+test('assembleHarmonicLoad: complex Robin load and zeroed constrained rows', () => {
+  const grid = buildGrid(harmBox().gridSpec);
+  const painted = paintBoxes(grid, harmBox().boxes, 'air');
+  const problem = assemble(grid, painted, harmMaterials, harmBox().bcs);
+  const { bRe, bIm } = assembleHarmonicLoad(problem, OMEGA_DIURNAL,
+    { exterior: { re: 1, im: 0 }, interior: { re: 0, im: 0 } });
+  assert.equal(bRe.length, problem.nNodes);
+  // void nodes carry no load
+  for (let nn = 0; nn < problem.nNodes; nn++) {
+    if (!problem.active[nn]) { assert.equal(bRe[nn], 0); assert.equal(bIm[nn], 0); }
+  }
+  // exterior surface nodes get a real load h·T̂·∮N dA > 0; nowhere imaginary here
+  let anyExt = 0;
+  for (const nn of regionNodes(problem, 'exterior')) if (bRe[nn] > 0) anyExt++;
+  assert.ok(anyExt > 0, 'exterior Robin load applied');
+  for (let nn = 0; nn < problem.nNodes; nn++) assert.equal(bIm[nn], 0, 'real ambient → real load');
 });

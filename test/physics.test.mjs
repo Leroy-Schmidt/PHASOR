@@ -4,7 +4,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MATERIALS } from '../src/model.mjs';
-import { uValue, wallSeriesResistance, fRsi, psiExternal } from '../src/physics.mjs';
+import {
+  uValue, wallSeriesResistance, fRsi, psiExternal,
+  OMEGA_ANNUAL, OMEGA_DIURNAL, penetrationDepth, semiInfinite,
+  climatePhasor, amplitude, timeLag, phasorEval,
+} from '../src/physics.mjs';
 
 const close = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`);
 
@@ -63,4 +67,79 @@ test('psiExternal: external-dimension convention, zero for an unbridged wall', (
   const corner = psiExternal({ L2D: 0.45, U, lengths });
   close(corner.psi, 0.45 - U * 2.83, 1e-12, 'ψ formula');
   assert.ok(corner.psi < 0, 'corner with external dimensions is typically negative');
+});
+
+// ====================================================================
+// M2 primitives (DESIGN §2.3–§2.6) — written BEFORE the harmonic code.
+// ====================================================================
+
+test('OMEGA constants match DESIGN §2.6', () => {
+  close(OMEGA_ANNUAL, 2 * Math.PI / 31_557_600, 1e-18, 'ω_annual');
+  close(OMEGA_DIURNAL, 2 * Math.PI / 86_400, 1e-15, 'ω_diurnal');
+  // δ ratio sqrt(365.25) follows from the frequency ratio alone
+  close(Math.sqrt(OMEGA_DIURNAL / OMEGA_ANNUAL), Math.sqrt(365.25), 1e-9, 'ω ratio');
+});
+
+test('penetrationDepth: concrete matches the DESIGN §2.3 table', () => {
+  const { lambda, rho, c } = MATERIALS.concrete;
+  const dd = penetrationDepth(lambda, rho, c, OMEGA_DIURNAL);
+  const da = penetrationDepth(lambda, rho, c, OMEGA_ANNUAL);
+  close(dd, 0.1551, 5e-4, 'concrete diurnal δ');
+  close(da, 2.965, 5e-3, 'concrete annual δ');
+  close(da / dd, Math.sqrt(365.25), 1e-9, 'δ_annual / δ_diurnal');
+});
+
+test('semiInfinite: amplitude e^{−x/δ} decay, phase −x/δ lag', () => {
+  const delta = 0.2;
+  const { amp, phase } = semiInfinite(3, delta, delta); // x = δ
+  close(amp, 3 * Math.exp(-1), 1e-12, 'amplitude at x=δ is A·e^{−1}');
+  close(phase, -1, 1e-12, 'phase at x=δ is −1 rad (a lag)');
+  assert.ok(semiInfinite(1, 2 * delta, delta).phase < semiInfinite(1, delta, delta).phase,
+    'phase decreases (lag grows) with depth');
+});
+
+test('amplitude / timeLag: a lagging phasor reports a positive lag', () => {
+  close(amplitude(3, 4), 5, 1e-12, '|3+4i|');
+  // pure-real positive phasor: no lag
+  close(timeLag(1, 0, OMEGA_DIURNAL), 0, 1e-12, 'real positive → zero lag');
+  // phasor at angle −1 rad lags by 1/ω seconds (DESIGN §2.6: τ = −arg/ω ≥ 0)
+  const re = Math.cos(-1);
+  const im = Math.sin(-1);
+  close(timeLag(re, im, OMEGA_DIURNAL), 1 / OMEGA_DIURNAL, 1e-6, 'lag = 1 rad / ω');
+  // lag is normalized into [0, period): a near-+π phase wraps to a long lag
+  const lag = timeLag(Math.cos(3), Math.sin(3), OMEGA_DIURNAL);
+  assert.ok(lag >= 0 && lag < 2 * Math.PI / OMEGA_DIURNAL, `lag ${lag} in [0,period)`);
+});
+
+test('phasorEval: reconstructs T̄ + Re[T̂ e^{iωt}] (DESIGN §2.5 sign)', () => {
+  // T̂ = 2 − 3i, single frequency; check against the explicit cos/sin form
+  const h = { re: 2, im: -3, omega: OMEGA_DIURNAL };
+  for (const t of [0, 1000, 43200, 80000]) {
+    const want = 5 + (h.re * Math.cos(h.omega * t) - h.im * Math.sin(h.omega * t));
+    close(phasorEval(5, [h], t), want, 1e-12, `phasorEval at t=${t}`);
+  }
+  // superposition of two harmonics adds
+  const a = { re: 1, im: 0, omega: OMEGA_ANNUAL };
+  const b = { re: 0, im: 1, omega: OMEGA_DIURNAL };
+  close(phasorEval(0, [a, b], 0), 1, 1e-12, 'two-harmonic superposition at t=0');
+});
+
+test('climatePhasor: minimum falls at the stated offset under e^{+iωt}', () => {
+  // annual: amplitude 10, minimum 15 days after t=0 (mid-January, DESIGN §5.3)
+  const ph = climatePhasor({ amp: 10, phaseDays: 15 }, OMEGA_ANNUAL);
+  close(amplitude(ph.re, ph.im), 10, 1e-9, 'phasor magnitude equals the amplitude');
+  const tMin = 15 * 86_400;
+  const harm = { ...ph, omega: OMEGA_ANNUAL };
+  const valAtMin = phasorEval(9, [harm], tMin);
+  close(valAtMin, 9 - 10, 1e-6, 'value at the stated offset is mean − amplitude (the minimum)');
+  // neighbours are warmer → it really is the minimum
+  const dt = 86_400;
+  assert.ok(phasorEval(9, [harm], tMin - dt) > valAtMin, 'before the min is warmer');
+  assert.ok(phasorEval(9, [harm], tMin + dt) > valAtMin, 'after the min is warmer');
+
+  // diurnal: minimum ~04:00 (4 h after midnight)
+  const pd = climatePhasor({ amp: 5, phaseHours: 4 }, OMEGA_DIURNAL);
+  const hd = { ...pd, omega: OMEGA_DIURNAL };
+  const tMinD = 4 * 3600;
+  close(phasorEval(20, [hd], tMinD), 20 - 5, 1e-6, 'diurnal minimum at 04:00');
 });

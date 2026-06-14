@@ -1,8 +1,10 @@
 // PHASOR 2D slice panel (DESIGN.md §4.1 decision 5): plain-canvas rendering of
-// the nodal temperature field — the primary instrument through M3. M1 scope:
-// one XY panel with a z-position slider, filled colormap, isolines, colorbar.
-// Shows the material map until a field arrives ("look before you solve").
+// the nodal field — the primary instrument through M3. M1: steady temperature.
+// M2 adds harmonic field modes (instantaneous T(t), amplitude |T̂|, phase-lag τ)
+// and the time scrubber, all evaluated client-side by superposition — never a
+// re-solve (DESIGN §3.5). Shows the material map until a field arrives.
 import { cellIndex, nodeIndex } from './grid.mjs';
+import { amplitude, timeLag } from './physics.mjs';
 
 // compact coolwarm-style diverging map: cold blue → neutral → warm red
 const STOPS = [
@@ -11,12 +13,36 @@ const STOPS = [
   [180, 4, 38],
 ];
 
-function colormap(t) {
+function diverging(t) {
   const s = t <= 0 ? 0 : t >= 1 ? 1 : t;
   const seg = s < 0.5 ? 0 : 1;
   const f = (s - seg * 0.5) * 2;
   const a = STOPS[seg];
   const b = STOPS[seg + 1];
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * f),
+    Math.round(a[1] + (b[1] - a[1]) * f),
+    Math.round(a[2] + (b[2] - a[2]) * f),
+  ];
+}
+
+// sequential map (dark → accent → pale) for magnitude-like fields (amplitude,
+// phase lag) where zero is meaningful and a diverging midpoint would mislead
+const SEQ = [
+  [13, 24, 59],
+  [38, 86, 140],
+  [62, 156, 161],
+  [158, 211, 142],
+  [247, 240, 180],
+];
+
+function sequential(t) {
+  const s = t <= 0 ? 0 : t >= 1 ? 1 : t;
+  const x = s * (SEQ.length - 1);
+  const seg = Math.min(SEQ.length - 2, Math.floor(x));
+  const f = x - seg;
+  const a = SEQ[seg];
+  const b = SEQ[seg + 1];
   return [
     Math.round(a[0] + (b[0] - a[0]) * f),
     Math.round(a[1] + (b[1] - a[1]) * f),
@@ -63,10 +89,22 @@ export class SlicePanel {
     container.append(this.header, this.canvas, barRow, this.note);
 
     this.model = null; // { grid, painted, materials }
-    this.T = null;     // nodal Float64Array
+    this.T = null;     // nodal Float64Array currently displayed
     this.range = null; // [min, max] over solid-cell nodes
     this.frac = 0.5;   // slice position along z, fraction of extent
     this._sized = false; // has the canvas ever rendered at a real size?
+
+    // Harmonic solution + display state (M2). `mean` is the steady field T̄;
+    // `harmonics` is [{ f, omega, re, im }]. The displayed field is derived
+    // from these by superposition — changing mode/time never re-solves.
+    this.mean = null;
+    this.harmonics = [];
+    this.mode = 'instant';   // 'instant' (T(t)) | 'amplitude' | 'phase'
+    this.freqOmega = null;   // selected frequency for amplitude / phase modes
+    this.time = 0;           // scrubber time, seconds
+    this.unit = '°C';
+    this._cm = diverging;    // active colormap
+    this._field = 'materials'; // header label for the current field
 
     // Rendering triggers. ResizeObserver alone is not enough: if the panel is
     // first laid out at 0×0 (tab restored, DevTools open then closed, tiling
@@ -89,12 +127,14 @@ export class SlicePanel {
     this.model = model;
     this.T = null;
     this.range = null;
+    this.mean = null;
+    this.harmonics = [];
+    this._field = 'materials';
     this.requestRender();
   }
 
-  /** @param {Float64Array} T nodal field for the CURRENT model's grid */
-  setField(T) {
-    this.T = T;
+  /** [min, max] of `values` over nodes touching a solid cell. */
+  rangeOverSolid(values) {
     const { grid, painted, materials } = this.model;
     let lo = Infinity;
     let hi = -Infinity;
@@ -103,21 +143,104 @@ export class SlicePanel {
         for (let i = 0; i < grid.nx; i++) {
           if (!materials[painted.matIds[painted.cells[cellIndex(grid, i, j, k)]]]) continue;
           for (let a = 0; a < 8; a++) {
-            const v = T[nodeIndex(grid, i + (a & 1), j + ((a >> 1) & 1), k + ((a >> 2) & 1))];
+            const v = values[nodeIndex(grid, i + (a & 1), j + ((a >> 1) & 1), k + ((a >> 2) & 1))];
             if (v < lo) lo = v;
             if (v > hi) hi = v;
           }
         }
       }
     }
-    this.range = hi > lo ? [lo, hi] : [lo - 0.5, lo + 0.5];
+    return hi > lo ? [lo, hi] : [lo - 0.5, lo + 0.5];
+  }
+
+  /**
+   * M1 / steady path: display a plain nodal temperature field directly.
+   * @param {Float64Array} T nodal field for the CURRENT model's grid
+   */
+  setField(T) {
+    this.mean = T;
+    this.harmonics = [];
+    this.mode = 'instant';
+    this.time = 0;
+    this._field = 'T [°C]';
+    this.unit = '°C';
+    this._cm = diverging;
+    this.T = T;
+    this.range = this.rangeOverSolid(T);
     this.note.textContent = '';
+    this.requestRender();
+  }
+
+  /**
+   * M2 path: store the mean field + harmonic phasors, then derive the displayed
+   * field from the current mode/time. `harmonics`: [{ f, omega, re, im }].
+   */
+  setSolution({ mean, harmonics }) {
+    this.mean = mean;
+    this.harmonics = harmonics ?? [];
+    if (this.freqOmega == null && this.harmonics.length) {
+      this.freqOmega = this.harmonics[0].omega;
+    }
+    this.note.textContent = '';
+    this._recompute();
+  }
+
+  setMode(mode) { this.mode = mode; this._recompute(); }
+
+  setFreq(omega) { this.freqOmega = omega; this._recompute(); }
+
+  setTime(t) { this.time = t; this._recompute(); }
+
+  /** Derive the displayed field (values, unit, colormap, header) from state. */
+  _recompute() {
+    if (!this.mean) { this.T = null; this.range = null; this.requestRender(); return; }
+    const n = this.mean.length;
+    const vals = new Float64Array(n);
+    if (this.mode === 'instant') {
+      // T(t) = T̄ + Σ_k [Re(T̂_k)cos(ω_k t) − Im(T̂_k)sin(ω_k t)] (DESIGN §2.5).
+      // cos/sin are node-independent — hoist them out of the node loop.
+      const cs = this.harmonics.map((h) => ({
+        re: h.re, im: h.im, c: Math.cos(h.omega * this.time), s: Math.sin(h.omega * this.time),
+      }));
+      for (let i = 0; i < n; i++) {
+        let v = this.mean[i];
+        for (const h of cs) v += h.re[i] * h.c - h.im[i] * h.s;
+        vals[i] = v;
+      }
+      this.unit = '°C';
+      this._cm = diverging;
+      this._field = 'T(t) [°C]';
+    } else {
+      const h = this.harmonics.find((x) => x.omega === this.freqOmega) ?? this.harmonics[0];
+      this._cm = sequential;
+      if (!h) {
+        for (let i = 0; i < n; i++) vals[i] = 0;
+        this.unit = '';
+        this._field = `${this.mode} (no harmonic)`;
+      } else if (this.mode === 'amplitude') {
+        for (let i = 0; i < n; i++) vals[i] = amplitude(h.re[i], h.im[i]);
+        this.unit = 'K';
+        this._field = `amplitude |T̂| [K] — ${h.f}`;
+      } else { // phase lag
+        const period = (2 * Math.PI) / h.omega;
+        const toUnit = period > 2 * 86400 ? 86400 : 3600; // days for annual, hours for diurnal
+        const ul = toUnit === 86400 ? 'days' : 'hours';
+        for (let i = 0; i < n; i++) vals[i] = timeLag(h.re[i], h.im[i], h.omega) / toUnit;
+        this.unit = ul;
+        this._field = `phase lag τ [${ul}] — ${h.f}`;
+      }
+    }
+    this.T = vals;
+    this.range = this.rangeOverSolid(vals);
     this.requestRender();
   }
 
   clearField(message = '') {
     this.T = null;
     this.range = null;
+    this.mean = null;
+    this.harmonics = [];
+    this._field = 'materials';
     this.note.textContent = message;
     this.requestRender();
   }
@@ -160,7 +283,7 @@ export class SlicePanel {
     }
     const kCell = Math.min(kNode, nz - 1);
     this.header.textContent =
-      `XY slice — z = ${zs[kNode].toFixed(3)} m — ${this.T ? 'T [°C]' : 'materials'}`;
+      `XY slice — z = ${zs[kNode].toFixed(3)} m — ${this.T ? this._field : 'materials'}`;
 
     // pixel → cell column/row lookup
     const colCell = new Int32Array(W).fill(-1);
@@ -206,7 +329,7 @@ export class SlicePanel {
           const v01 = this.T[nodeIndex(grid, i, j + 1, kNode)];
           const v11 = this.T[nodeIndex(grid, i + 1, j + 1, kNode)];
           const v = (1 - ty) * ((1 - tx) * v00 + tx * v10) + ty * ((1 - tx) * v01 + tx * v11);
-          [r, g, b] = colormap((v - lo) * inv);
+          [r, g, b] = this._cm((v - lo) * inv);
         } else {
           const c = mat.color ?? 0x808080;
           r = (c >> 16) & 255;
@@ -299,7 +422,7 @@ export class SlicePanel {
     }
     const img = ctx.createImageData(W, H);
     for (let q = 0; q < W; q++) {
-      const [r, g, b] = colormap(q / (W - 1));
+      const [r, g, b] = this._cm(q / (W - 1));
       for (let p = 0; p < H; p++) {
         const o = 4 * (p * W + q);
         img.data[o] = r;
@@ -309,7 +432,8 @@ export class SlicePanel {
       }
     }
     ctx.putImageData(img, 0, 0);
-    this.barMin.textContent = `${this.range[0].toFixed(1)} °C`;
-    this.barMax.textContent = `${this.range[1].toFixed(1)} °C`;
+    const u = this.unit ? ` ${this.unit}` : '';
+    this.barMin.textContent = `${this.range[0].toFixed(2)}${u}`;
+    this.barMax.textContent = `${this.range[1].toFixed(2)}${u}`;
   }
 }

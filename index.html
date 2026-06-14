@@ -29,8 +29,19 @@
   /* stop the browser from starting a native drag / text-select on the canvas
      mid-rotate (shows the not-allowed cursor and stalls OrbitControls) */
   #view canvas { touch-action: none; -webkit-user-drag: none; display: block; }
-  #slices { grid-area: slices; background: var(--panel); border-radius: 6px;
-    display: flex; flex-direction: column; gap: 6px; padding: 10px; min-height: 0; }
+  #slices { grid-area: slices; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  #slices details { background: var(--panel); border-radius: 6px; min-height: 0;
+    display: flex; flex-direction: column; overflow: hidden; }
+  #slices details[open] { flex: 1 1 0; }          /* open panels share the column */
+  #slices details:not([open]) { flex: 0 0 auto; }  /* folded panels shrink to the title */
+  #slices summary { cursor: pointer; padding: 8px 10px; color: var(--text); font-size: 12px;
+    user-select: none; list-style: none; }
+  #slices summary::-webkit-details-marker { display: none; }
+  #slices summary::before { content: '▾ '; color: var(--accent); }
+  #slices details:not([open]) summary::before { content: '▸ '; }
+  #slices .panel-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+    gap: 6px; padding: 0 10px 10px; }
+  #readouts-wrap { background: var(--panel); border-radius: 6px; padding: 10px; }
   .slice-header { color: #8a919a; font-size: 12px; }
   .slice-canvas { flex: 1 1 auto; min-height: 120px; width: 100%; }
   .slice-bar-row { display: flex; gap: 8px; align-items: center; }
@@ -42,7 +53,14 @@
   #readouts .bad { color: #e0533d; font-weight: 600; }
   #readouts .ok { color: #7dba6a; }
   #scrub { grid-area: scrub; background: var(--panel); border-radius: 6px;
-    display: flex; align-items: center; padding: 0 16px; color: #5a6068; gap: 16px; }
+    display: flex; align-items: center; padding: 0 16px; color: #8a919a; gap: 14px; }
+  #scrub label { font-size: 12px; color: #8a919a; white-space: nowrap; }
+  #scrub button { background: #20242b; color: var(--text); border: 1px solid #2d323b;
+    border-radius: 4px; padding: 5px 12px; cursor: pointer; font: inherit; }
+  #scrub button:hover { border-color: var(--accent); }
+  #scrub input[type=range] { flex: 1 1 auto; accent-color: var(--accent); }
+  #scrub-time { min-width: 96px; text-align: right; color: var(--accent);
+    font-variant-numeric: tabular-nums; }
   #status { position: absolute; left: 10px; bottom: 8px; color: var(--accent);
     font-variant-numeric: tabular-nums; pointer-events: none; }
 </style>
@@ -59,22 +77,85 @@
 <body>
   <div id="view"><div id="status"></div></div>
   <div id="slices"></div>
-  <div id="scrub">time scrubber — M2</div>
+  <div id="scrub">
+    <button id="scrub-mode" title="Toggle day / year sweep">Day</button>
+    <label>time</label>
+    <input id="scrub-range" type="range" min="0" max="1" step="0.001" value="0">
+    <span id="scrub-time">00:00</span>
+  </div>
 
 <script type="module">
 import { buildGrid, paintBoxes } from './src/grid.mjs';
 import { MATERIALS, presets, layersWithInsulation } from './src/model.mjs';
 import { Viz3D } from './src/viz3d.mjs';
 import { SlicePanel } from './src/viz2d.mjs';
-import { buildUI } from './src/ui.mjs';
+import { LineProbe } from './src/lineprobe.mjs';
+import { buildUI, FIELD_MODES } from './src/ui.mjs';
+import { OMEGA_ANNUAL, OMEGA_DIURNAL } from './src/physics.mjs';
+
+const OMEGA = { annual: OMEGA_ANNUAL, diurnal: OMEGA_DIURNAL };
 
 const viz = new Viz3D(document.getElementById('view'));
 const status = document.getElementById('status');
 const slicesEl = document.getElementById('slices');
-const slices = new SlicePanel(slicesEl);
+slicesEl.textContent = '';
+
+// Collapsible panels so they don't crowd each other: fold one away to give the
+// other the column. A <details> 'toggle' re-renders so the canvas resizes.
+function makeSection(title, open) {
+  const d = document.createElement('details');
+  d.open = open;
+  const summary = document.createElement('summary');
+  summary.textContent = title;
+  const body = document.createElement('div');
+  body.className = 'panel-body';
+  d.append(summary, body);
+  slicesEl.appendChild(d);
+  return { details: d, body };
+}
+
+const mapSec = makeSection('Field map (slice)', true);
+const probeSec = makeSection('Line probe (profile)', true);
+const slices = new SlicePanel(mapSec.body);
+const probe = new LineProbe(probeSec.body);
+mapSec.details.addEventListener('toggle', () => slices.requestRender());
+probeSec.details.addEventListener('toggle', () => probe.requestRender());
+
+const readoutsWrap = document.createElement('div');
+readoutsWrap.id = 'readouts-wrap';
 const readouts = document.createElement('div');
 readouts.id = 'readouts';
-slicesEl.appendChild(readouts);
+readoutsWrap.appendChild(readouts);
+slicesEl.appendChild(readoutsWrap);
+
+// --- time scrubber (signature instrument): sweeps a day or a year while the
+// field breathes. Pure phasor evaluation in the panel — never a re-solve.
+const scrubMode = { unit: 'day' };
+const scrubRange = document.getElementById('scrub-range');
+const scrubTime = document.getElementById('scrub-time');
+const scrubModeBtn = document.getElementById('scrub-mode');
+
+function applyScrub() {
+  const frac = parseFloat(scrubRange.value);
+  const day = scrubMode.unit === 'day';
+  const period = day ? 86400 : 31557600;
+  slices.setTime(frac * period);
+  probe.setTime(frac * period);
+  if (day) {
+    const h = frac * 24;
+    const hh = Math.floor(h);
+    const mm = Math.round((h - hh) * 60);
+    scrubTime.textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  } else {
+    scrubTime.textContent = `day ${Math.round(frac * 365.25)}`;
+  }
+}
+scrubRange.addEventListener('input', applyScrub);
+scrubModeBtn.addEventListener('click', () => {
+  scrubMode.unit = scrubMode.unit === 'day' ? 'year' : 'day';
+  scrubModeBtn.textContent = scrubMode.unit === 'day' ? 'Day' : 'Year';
+  applyScrub();
+});
 
 let current = null; // { name, params }
 let seq = 0;        // solve sequence — bumping it invalidates in-flight results
@@ -84,7 +165,9 @@ function loadPreset(name, params = {}) {
   const grid = buildGrid(preset.gridSpec);
   const painted = paintBoxes(grid, preset.boxes, preset.background);
   viz.showModel(grid, painted, MATERIALS, preset.background, preset.extent);
-  slices.setModel({ grid, painted, materials: MATERIALS });
+  const m = { grid, painted, materials: MATERIALS };
+  slices.setModel(m);
+  probe.setModel(m);
   current = { name, params };
   status.textContent =
     `${name} — ${grid.nx}×${grid.ny}×${grid.nz} = ${grid.nx * grid.ny * grid.nz} cells`;
@@ -102,6 +185,7 @@ function solve() {
 function invalidate(message) {
   seq++; // any in-flight result is now stale
   slices.clearField(message);
+  probe.clear();
   readouts.innerHTML = '';
 }
 
@@ -109,14 +193,26 @@ worker.onmessage = (e) => {
   const m = e.data;
   if (m.id !== seq) return; // stale result for an old geometry
   if (m.type === 'progress') {
-    status.textContent = `CG iteration ${m.iter} — rel. residual ${m.relRes.toExponential(1)}`;
+    status.textContent = m.phase
+      ? `solving ${m.phase} harmonic…`
+      : `CG iteration ${m.iter} — rel. residual ${m.relRes.toExponential(1)}`;
   } else if (m.type === 'error') {
     status.textContent = `Solver error: ${m.message} — refine the grid or report this`;
   } else if (m.type === 'result') {
-    slices.setField(new Float64Array(m.T));
+    const harmonics = (m.harmonics ?? []).map((h) => ({
+      f: h.f, omega: h.omega, re: new Float64Array(h.re), im: new Float64Array(h.im),
+    }));
+    const mean = new Float64Array(m.T);
+    slices.setSolution({ mean, harmonics });
+    slices.setMode(FIELD_MODES[ui.field]);
+    slices.setFreq(OMEGA[ui.freq]);
+    probe.setSolution({ mean, harmonics });
+    probe.setFreq(OMEGA[ui.freq]);
+    applyScrub();
     renderReadouts(m.readouts);
-    status.textContent = `solved — ${m.stats.cells} cells, CG ${m.stats.iterations} it, ` +
-      `rel. residual ${m.stats.relRes.toExponential(1)}`;
+    const hi = m.harmonics.map((h) => `${h.f} ${h.iterations} it`).join(', ');
+    status.textContent = `solved — ${m.stats.cells} cells, mean CG ${m.stats.iterations} it; ` +
+      `COCG ${hi}`;
   }
 };
 worker.onerror = (e) => {
@@ -128,11 +224,15 @@ function fmt(v, digits = 3) {
 }
 
 function renderReadouts(r) {
-  const mold = r.fRsi < 0.70;
-  const fLine =
-    `f_Rsi (R_si = ${r.RsiUsed} m²K/W) = <span class="${mold ? 'bad' : 'ok'}">${fmt(r.fRsi, 3)}</span> ` +
-    (mold ? '✗ &lt; 0.70 — mold risk' : '✓ ≥ 0.70') +
-    ` · θ_si,min = ${fmt(r.thetaSiMin25, 2)} °C`;
+  const fLine = r.fRsi == null
+    ? 'f_Rsi — n/a for this preset (no interior surface)'
+    : (() => {
+      const mold = r.fRsi < 0.70;
+      return `f_Rsi (R_si = ${r.RsiUsed} m²K/W) = ` +
+        `<span class="${mold ? 'bad' : 'ok'}">${fmt(r.fRsi, 3)}</span> ` +
+        (mold ? '✗ &lt; 0.70 — mold risk' : '✓ ≥ 0.70') +
+        ` · θ_si,min = ${fmt(r.thetaSiMin25, 2)} °C`;
+    })();
   const psiLine = r.psi
     ? `ψ = ${fmt(r.psi.psi, 4)} W/(m·K) — external dimensions · ` +
       `U = ${fmt(r.U, 3)} W/(m²K) · L₂D = ${fmt(r.L2D, 4)} W/(m·K)`
@@ -156,6 +256,8 @@ const ui = buildUI(Object.keys(presets), {
     invalidate('geometry changed — press Solve');
   },
   onSlice: (frac) => slices.setSlice(frac),
+  onField: (mode) => slices.setMode(mode),
+  onFreq: (f) => { slices.setFreq(OMEGA[f]); probe.setFreq(OMEGA[f]); },
   onSolve: () => solve(),
 });
 

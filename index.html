@@ -236,7 +236,7 @@ function renderReadouts(r) {
   const psiLine = r.psi
     ? `ψ = ${fmt(r.psi.psi, 4)} W/(m·K) — external dimensions · ` +
       `U = ${fmt(r.U, 3)} W/(m²K) · L₂D = ${fmt(r.L2D, 4)} W/(m·K)`
-    : 'ψ — only for extruded junction presets (corner2d)';
+    : 'ψ — only for extruded junction presets (corner2d, slab_junction)';
   const phiLine = `Φ_exterior = ${fmt(Math.abs(r.phi.exterior ?? NaN), 3)} W ` +
     `(${fmt(r.Ti, 0)} °C inside / ${fmt(r.Te, 0)} °C outside)`;
   readouts.innerHTML = `${fLine}<br>${psiLine}<br>${phiLine}`;
@@ -258,6 +258,7 @@ const ui = buildUI(Object.keys(presets), {
   onSlice: (frac) => slices.setSlice(frac),
   onField: (mode) => slices.setMode(mode),
   onFreq: (f) => { slices.setFreq(OMEGA[f]); probe.setFreq(OMEGA[f]); },
+  onFreqToggle: (f, on) => slices.setEnabled(f, on),
   onSolve: () => solve(),
 });
 

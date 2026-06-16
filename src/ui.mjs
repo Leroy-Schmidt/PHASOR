@@ -20,6 +20,7 @@ export const FIELD_MODES = {
  *          onSlice: (frac: number) => void,
  *          onField: (mode: 'instant'|'amplitude'|'phase') => void,
  *          onFreq: (f: 'annual'|'diurnal') => void,
+ *          onFreqToggle: (f: 'annual'|'diurnal', on: boolean) => void,
  *          onSolve: () => void}} handlers
  */
 export function buildUI(presetNames, handlers) {
@@ -31,6 +32,8 @@ export function buildUI(presetNames, handlers) {
     sliceZ: 0.5,
     field: 'T(t) instantaneous',
     freq: 'annual',
+    incAnnual: true,
+    incDiurnal: true,
     solve: () => handlers.onSolve(),
   };
   const gui = new GUI({ title: 'PHASOR' });
@@ -56,6 +59,13 @@ export function buildUI(presetNames, handlers) {
   gui.add(state, 'freq', ['annual', 'diurnal'])
     .name('Frequency (amp/phase)')
     .onChange((v) => handlers.onFreq(v));
+  // per-frequency toggles: which harmonics enter the instantaneous T(t) sum
+  gui.add(state, 'incAnnual')
+    .name('T(t): annual')
+    .onChange((v) => handlers.onFreqToggle('annual', v));
+  gui.add(state, 'incDiurnal')
+    .name('T(t): diurnal')
+    .onChange((v) => handlers.onFreqToggle('diurnal', v));
   gui.add(state, 'solve').name('Solve');
 
   return state;

@@ -20,7 +20,10 @@ function countByMaterial(painted) {
 
 test('all preset materials exist in the material table', () => {
   for (const make of Object.values(presets)) {
-    for (const box of make().boxes) {
+    const preset = make();
+    for (const box of preset.boxes) {
+      // a box may paint the background id to carve a void (e.g. basement's room)
+      if (box.material === preset.background) continue;
       assert.ok(MATERIALS[box.material], `unknown material '${box.material}'`);
     }
   }

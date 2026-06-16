@@ -100,6 +100,7 @@ export class SlicePanel {
     this.mean = null;
     this.harmonics = [];
     this.mode = 'instant';   // 'instant' (T(t)) | 'amplitude' | 'phase'
+    this.enabled = new Set(['annual', 'diurnal']); // freqs summed into T(t)
     this.freqOmega = null;   // selected frequency for amplitude / phase modes
     this.time = 0;           // scrubber time, seconds
     this.unit = '°C';
@@ -187,6 +188,12 @@ export class SlicePanel {
 
   setMode(mode) { this.mode = mode; this._recompute(); }
 
+  /** Toggle whether a frequency (by id, e.g. 'annual') is summed into T(t). */
+  setEnabled(freq, on) {
+    if (on) this.enabled.add(freq); else this.enabled.delete(freq);
+    this._recompute();
+  }
+
   setFreq(omega) { this.freqOmega = omega; this._recompute(); }
 
   setTime(t) { this.time = t; this._recompute(); }
@@ -199,9 +206,11 @@ export class SlicePanel {
     if (this.mode === 'instant') {
       // T(t) = T̄ + Σ_k [Re(T̂_k)cos(ω_k t) − Im(T̂_k)sin(ω_k t)] (DESIGN §2.5).
       // cos/sin are node-independent — hoist them out of the node loop.
-      const cs = this.harmonics.map((h) => ({
-        re: h.re, im: h.im, c: Math.cos(h.omega * this.time), s: Math.sin(h.omega * this.time),
-      }));
+      const cs = this.harmonics
+        .filter((h) => this.enabled.has(h.f))
+        .map((h) => ({
+          re: h.re, im: h.im, c: Math.cos(h.omega * this.time), s: Math.sin(h.omega * this.time),
+        }));
       for (let i = 0; i < n; i++) {
         let v = this.mean[i];
         for (const h of cs) v += h.re[i] * h.c - h.im[i] * h.s;

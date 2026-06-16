@@ -159,4 +159,113 @@ export function soil_rod({ depth = 10, width = 3, maxH = 0.04 } = {}) {
   };
 }
 
-export const presets = { wall1d, corner2d, soil_rod };
+/**
+ * `slab_junction` — exterior wall with a concrete floor slab penetrating and
+ * INTERRUPTING the exterior insulation; extruded thin in z, adiabatic ends. The
+ * classic *constructive* thermal bridge (DESIGN §5.1.3). x runs exterior (x=0)
+ * → interior; the slab spans the full wall thickness at mid-height, so its edge
+ * is flush with the exterior face — a strong heat shortcut around the eps.
+ *
+ * ψ uses the external-dimension convention (CLAUDE.md M1): the two flanking 1-D
+ * elements are the wall above and below the junction, ψ = L_2D − U·Σl_j. The
+ * UI's `layers` param is ignored — this detail carries its own fixed build-up so
+ * psiSpec.layers stays consistent with the painted boxes.
+ */
+export function slab_junction({
+  wallLayers = [
+    { material: 'eps', thickness: 0.12 },
+    { material: 'concrete', thickness: 0.20 },
+    { material: 'plaster', thickness: 0.015 },
+  ],
+  height = 2.0, slabThickness = 0.20, depth = 0.2,
+} = {}) {
+  const faces = [0];
+  for (const l of wallLayers) faces.push(faces[faces.length - 1] + l.thickness);
+  const t = faces[faces.length - 1];        // total wall thickness
+  const yMid = height / 2;
+  const ys = yMid - slabThickness / 2;
+  const yf = yMid + slabThickness / 2;
+
+  // painter order: wall layers first, then the slab over them at mid-height
+  const boxes = wallLayers.map((l, n) => ({
+    name: `wall_${n}_${l.material}`,
+    x: [faces[n], faces[n + 1]], y: [0, height], z: [0, depth], material: l.material,
+  }));
+  boxes.push({ name: 'slab', x: [0, t], y: [ys, yf], z: [0, depth], material: 'concrete' });
+
+  return {
+    name: 'slab_junction',
+    boxes,
+    background: 'air',
+    bcs: [
+      { name: 'exterior', select: { axis: 'x', side: 'min' }, type: 'robin', ...CLIMATE.external },
+      { name: 'interior', select: { axis: 'x', side: 'max' }, type: 'robin', ...CLIMATE.internal },
+      { name: 'cuts', select: 'rest', type: 'adiabatic' },
+    ],
+    gridSpec: {
+      x: { mandatory: faces, maxH: 0.02 },
+      y: { mandatory: [0, ys, yf, height], maxH: 0.05 },
+      z: { mandatory: [0, depth], maxH: 0.1, minCells: 2 },
+    },
+    extent: { x: [0, t], y: [0, height], z: [0, depth] },
+    // external-dimension reference lengths: wall above + below the junction.
+    psiSpec: { lengths: [height - yMid, yMid], Lz: depth, layers: wallLayers },
+  };
+}
+
+/**
+ * `basement` — a bare concrete cellar wall + floor against a soil block
+ * (DESIGN §5.1.4): the "why does the cellar peak in September" demo. Cross-
+ * section in x–y, extruded thin in z; x=0 is the room-center vertical symmetry
+ * plane. Built entirely below grade, so the only non-soil exterior surface is
+ * the ground (top), which carries the external climate phasors. The annual wave
+ * diffuses down through metres of soil and reaches the structure lagged by ~2
+ * months (δ_soil ≈ 2.84 m).
+ *
+ * Painter order: soil fill → floor slab → wall → room void (air carves the
+ * cellar). The room is the only void, so `facesInside` selects exactly the
+ * heated interior surfaces (wall inner face + floor top). The deep boundary is
+ * Dirichlet at T_mean; solveHarmonic's default `dirichlet:'zero'` correctly
+ * vanishes its harmonic part while the steady solve holds it at T_mean.
+ *
+ * `soilPad` (lateral soil beyond the wall) and `soilDepth` (soil below the
+ * floor) default to 9 m ≈ 3·δ_annual — verified domain-independent by G3.1.
+ */
+export function basement({
+  soilPad = 9, soilDepth = 9, roomHalfWidth = 2.0, wallThickness = 0.3,
+  roomHeight = 2.5, slabThickness = 0.2, thin = 0.2, maxH = 0.25,
+} = {}) {
+  const xWallOuter = roomHalfWidth + wallThickness;
+  const W = xWallOuter + soilPad;
+  const yFloorBottom = soilDepth;
+  const yFloorTop = yFloorBottom + slabThickness;
+  const H = yFloorTop + roomHeight;       // grade at y = H
+  const Tmean = CLIMATE.external.T.mean;
+
+  return {
+    name: 'basement',
+    boxes: [
+      { name: 'soil', x: [0, W], y: [0, H], z: [0, thin], material: 'soil' },
+      { name: 'floor', x: [0, xWallOuter], y: [yFloorBottom, yFloorTop], z: [0, thin], material: 'concrete' },
+      { name: 'wall', x: [roomHalfWidth, xWallOuter], y: [yFloorTop, H], z: [0, thin], material: 'concrete' },
+      { name: 'room', x: [0, roomHalfWidth], y: [yFloorTop, H], z: [0, thin], material: 'air' },
+    ],
+    background: 'air',
+    bcs: [
+      { name: 'interior', select: { facesInside: true }, type: 'robin', ...CLIMATE.internal },
+      // 'exterior' = the ground surface exposed to external climate (named so the
+      // f_Rsi / Φ readouts, which key on 'exterior'/'interior', work unchanged).
+      { name: 'exterior', select: { axis: 'y', side: 'max' }, type: 'robin', ...CLIMATE.external },
+      { name: 'deep', select: { axis: 'y', side: 'min' }, type: 'dirichlet', value: Tmean },
+      { name: 'cuts', select: 'rest', type: 'adiabatic' },
+    ],
+    gridSpec: {
+      x: { mandatory: [0, roomHalfWidth, xWallOuter, W], maxH },
+      y: { mandatory: [0, yFloorBottom, yFloorTop, H], maxH },
+      z: { mandatory: [0, thin], maxH: 0.1, minCells: 2 },
+    },
+    extent: { x: [0, W], y: [0, H], z: [0, thin] },
+  };
+}
+
+export const presets = { wall1d, corner2d, slab_junction, basement, soil_rod };

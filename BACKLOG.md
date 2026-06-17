@@ -21,6 +21,11 @@ instead of being argued with. One line each, date + idea.
   (it's physical, not discretization). G3.2 is therefore pinned on the phase
   *lag* (the September timing, robust). If a quantitative amplitude-decay readout
   is wanted, sample well above the bottom or model deeper.
+- 2026-06-18 — Phase-lag colormap (M4 polish): on `basement` the τ map spans
+  0–365 d because deep nodes (|T̂|→0 at the Dirichlet) have ill-defined, wrapping
+  phase, which blows out the color scale and hides the meaningful near-surface
+  gradient. Mask/ξ-clamp low-amplitude nodes (e.g. |T̂| < ε of the surface amp)
+  in the phase map. The line probe — the G3.2 instrument — is unaffected.
 - 2026-06-12 — Watch: orbit-rotate occasionally stalled with a `not-allowed`
   cursor. Applied preventive CSS (`user-select:none` on #view, `touch-action:none`
   + `-webkit-user-drag:none` on the canvas). If it resurfaces, suspect a

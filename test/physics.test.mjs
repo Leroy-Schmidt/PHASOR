@@ -7,7 +7,7 @@ import { MATERIALS } from '../src/model.mjs';
 import {
   uValue, wallSeriesResistance, fRsi, psiExternal,
   OMEGA_ANNUAL, OMEGA_DIURNAL, penetrationDepth, semiInfinite,
-  climatePhasor, amplitude, timeLag, timeLagRelative, phasorEval,
+  climatePhasor, amplitude, timeLag, timeLagRelative, phasorEval, instantRange,
 } from '../src/physics.mjs';
 
 const close = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`);
@@ -138,6 +138,34 @@ test('phasorEval: reconstructs T̄ + Re[T̂ e^{iωt}] (DESIGN §2.5 sign)', () =
   const a = { re: 1, im: 0, omega: OMEGA_ANNUAL };
   const b = { re: 0, im: 1, omega: OMEGA_DIURNAL };
   close(phasorEval(0, [a, b], 0), 1, 1e-12, 'two-harmonic superposition at t=0');
+});
+
+test('instantRange: a time-invariant envelope that always contains phasorEval', () => {
+  // single harmonic: the bound is exact (mean ± |T̂|), reached twice per period.
+  // |3 − 4i| = 5, so the envelope is [5 − 5, 5 + 5] = [0, 10].
+  const h = { re: 3, im: -4, omega: OMEGA_DIURNAL };
+  const [lo1, hi1] = instantRange(5, [h]);
+  close(lo1, 0, 1e-12, 'single-harmonic lo = mean − |T̂|');
+  close(hi1, 10, 1e-12, 'single-harmonic hi = mean + |T̂|');
+
+  // two harmonics: the field must stay inside the envelope at EVERY sampled time,
+  // and the envelope itself does not depend on t (the colour scale never moves).
+  const harms = [
+    { re: 1.3, im: -0.7, omega: OMEGA_ANNUAL },
+    { re: -0.4, im: 0.9, omega: OMEGA_DIURNAL },
+  ];
+  const mean = 12;
+  const [lo, hi] = instantRange(mean, harms);
+  const period = 2 * Math.PI / OMEGA_DIURNAL;
+  for (let n = 0; n <= 500; n++) {
+    const t = (n / 500) * period * 3; // sweep several diurnal periods
+    const v = phasorEval(mean, harms, t);
+    assert.ok(v >= lo - 1e-9 && v <= hi + 1e-9,
+      `phasorEval ${v} escaped the envelope [${lo}, ${hi}] at t=${t}`);
+  }
+  // generous-but-containing with multiple harmonics: the envelope half-width is
+  // the SUM of the amplitudes (1.486… + 0.984… ≈ 2.47), wider than either alone
+  close((hi - lo) / 2, Math.hypot(1.3, -0.7) + Math.hypot(-0.4, 0.9), 1e-12, 'half-width = Σ|T̂|');
 });
 
 test('climatePhasor: minimum falls at the stated offset under e^{+iωt}', () => {

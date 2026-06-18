@@ -54,6 +54,11 @@ export class SlicePanel {
     this.model = null; // { grid, painted, materials }
     this.T = null;     // nodal Float64Array currently displayed
     this.range = null; // [min, max] over solid-cell nodes
+    // T(t) mode: a FIXED color range over the field's full temporal envelope
+    // (T̄ ± Σ|T̂|), so a node keeps its colour as the scrubber sweeps — only the
+    // pattern moves, not the scale. Recomputed on solve / freq-toggle, never on
+    // a scrub tick. Amplitude / phase modes are already time-invariant.
+    this._instantRange = null;
     this.frac = 0.5;   // slice position along z, fraction of extent
     this._sized = false; // has the canvas ever rendered at a real size?
 
@@ -103,6 +108,7 @@ export class SlicePanel {
     this.model = model;
     this.T = null;
     this.range = null;
+    this._instantRange = null;
     this.mean = null;
     this.harmonics = [];
     this._field = 'materials';
@@ -131,6 +137,27 @@ export class SlicePanel {
   }
 
   /**
+   * Fixed T(t) color range over the temporal envelope T̄ ± Σ_enabled|T̂_k| at
+   * every solid node (physics.instantRange per node). Time-invariant by
+   * construction; recompute only when the solution or the enabled-harmonic set
+   * changes, so scrubbing never moves the scale.
+   */
+  _computeInstantRange() {
+    if (!this.mean) { this._instantRange = null; return; }
+    const n = this.mean.length;
+    const hs = this.harmonics.filter((h) => this.enabled.has(h.f));
+    const eMin = new Float64Array(n);
+    const eMax = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let sum = 0;
+      for (const h of hs) sum += Math.hypot(h.re[i], h.im[i]);
+      eMin[i] = this.mean[i] - sum;
+      eMax[i] = this.mean[i] + sum;
+    }
+    this._instantRange = [this.rangeOverSolid(eMin)[0], this.rangeOverSolid(eMax)[1]];
+  }
+
+  /**
    * M1 / steady path: display a plain nodal temperature field directly.
    * @param {Float64Array} T nodal field for the CURRENT model's grid
    */
@@ -144,6 +171,7 @@ export class SlicePanel {
     this._cm = diverging;
     this.T = T;
     this.range = this.rangeOverSolid(T);
+    this._instantRange = this.range; // no harmonics → envelope is just the field
     this.note.textContent = '';
     this.requestRender();
     this._emitField();
@@ -160,6 +188,7 @@ export class SlicePanel {
       this.freqOmega = this.harmonics[0].omega;
     }
     this.note.textContent = '';
+    this._computeInstantRange();
     this._recompute();
   }
 
@@ -168,6 +197,7 @@ export class SlicePanel {
   /** Toggle whether a frequency (by id, e.g. 'annual') is summed into T(t). */
   setEnabled(freq, on) {
     if (on) this.enabled.add(freq); else this.enabled.delete(freq);
+    this._computeInstantRange(); // the envelope depends on which harmonics sum in
     this._recompute();
   }
 
@@ -228,7 +258,14 @@ export class SlicePanel {
       }
     }
     this.T = vals;
-    this.range = this.rangeOverSolid(vals);
+    if (this.mode === 'instant') {
+      // fixed envelope range — stable across scrub time (computed on solve)
+      if (!this._instantRange) this._computeInstantRange();
+      this.range = this._instantRange;
+    } else {
+      // amplitude / phase: time-invariant already, scale to the field itself
+      this.range = this.rangeOverSolid(vals);
+    }
     this.requestRender();
     this._emitField();
   }
@@ -236,6 +273,7 @@ export class SlicePanel {
   clearField(message = '') {
     this.T = null;
     this.range = null;
+    this._instantRange = null;
     this.mean = null;
     this.harmonics = [];
     this._field = 'materials';

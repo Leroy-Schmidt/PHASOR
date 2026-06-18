@@ -149,3 +149,21 @@ export function phasorEval(mean, harmonics, t) {
   }
   return v;
 }
+
+/**
+ * Time-invariant bound on the instantaneous field at one node: the value of
+ * phasorEval(mean, harmonics, t) is contained in [mean − Σ|T̂_k|, mean + Σ|T̂_k|]
+ * for every t (since each Re[T̂_k e^{iω_k t}] ∈ [−|T̂_k|, +|T̂_k|]). The display
+ * uses this envelope as a FIXED color range so a node keeps its colour as the
+ * scrubber sweeps — only the pattern moves, not the scale. The bound is tight
+ * per harmonic; with 2+ harmonics it is slightly generous (they rarely all peak
+ * together) but always containing — never clips the field.
+ * @param {number} mean — T̄ at the node
+ * @param {{re: number, im: number}[]} harmonics — phasors entering the sum
+ * @returns {[number, number]} [lo, hi]
+ */
+export function instantRange(mean, harmonics) {
+  let sum = 0;
+  for (const h of harmonics) sum += Math.hypot(h.re, h.im);
+  return [mean - sum, mean + sum];
+}

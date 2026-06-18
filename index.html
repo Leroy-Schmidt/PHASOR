@@ -85,6 +85,7 @@
   <div id="view"><div id="status"></div></div>
   <div id="slices"></div>
   <div id="scrub">
+    <button id="scrub-play" title="Play / pause time">▶</button>
     <button id="scrub-mode" title="Toggle day / year sweep">Day</button>
     <label>time</label>
     <input id="scrub-range" type="range" min="0" max="1" step="0.001" value="0">
@@ -99,6 +100,7 @@ import { SlicePanel } from './src/viz2d.mjs';
 import { LineProbe } from './src/lineprobe.mjs';
 import { buildUI, FIELD_MODES } from './src/ui.mjs';
 import { OMEGA_ANNUAL, OMEGA_DIURNAL } from './src/physics.mjs';
+import { advanceFraction } from './src/scrub.mjs';
 
 const OMEGA = { annual: OMEGA_ANNUAL, diurnal: OMEGA_DIURNAL };
 
@@ -219,6 +221,33 @@ scrubModeBtn.addEventListener('click', () => {
   scrubModeBtn.textContent = scrubMode.unit === 'day' ? 'Day' : 'Year';
   applyScrub();
 });
+
+// --- play/pause: animate the scrubber hands-free over the solve-free phasor
+// path (BACKLOG QoL). A rAF loop advances the scrub fraction; one full sweep
+// takes SWEEP_SECONDS. Stops on pause and when the user grabs the scrubber.
+const SWEEP_SECONDS = 12;
+const playBtn = document.getElementById('scrub-play');
+let playing = false;
+let rafId = null;
+let lastTs = 0;
+function playTick(ts) {
+  if (!playing) return;
+  const dt = lastTs ? (ts - lastTs) / 1000 : 0;
+  lastTs = ts;
+  scrubRange.value = String(advanceFraction(parseFloat(scrubRange.value), dt, 1 / SWEEP_SECONDS));
+  applyScrub(); // programmatic .value change doesn't fire 'input' — call directly
+  rafId = requestAnimationFrame(playTick);
+}
+function setPlaying(on) {
+  if (on === playing) return;
+  playing = on;
+  playBtn.textContent = on ? '⏸' : '▶';
+  if (on) { lastTs = 0; rafId = requestAnimationFrame(playTick); }
+  else if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+}
+playBtn.addEventListener('click', () => setPlaying(!playing));
+// a real user drag fires 'input' (programmatic sets above don't) → interrupt play
+scrubRange.addEventListener('input', () => setPlaying(false));
 
 let current = null; // { name, params }
 let seq = 0;        // solve sequence — bumping it invalidates in-flight results

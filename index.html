@@ -271,6 +271,9 @@ function loadPreset(name, params = {}) {
   const preset = presets[name](params);
   const grid = buildGrid(preset.gridSpec);
   const painted = paintBoxes(grid, preset.boxes, preset.background);
+  // quarter-symmetry presets (basement3d) mirror the solved quadrant out to the
+  // full model for display; others render as-is. Set before showModel builds it.
+  viz.setSymmetry(preset.symmetry);
   viz.showModel(grid, painted, MATERIALS, preset.background, preset.extent);
   const m = { grid, painted, materials: MATERIALS };
   currentModel = m;

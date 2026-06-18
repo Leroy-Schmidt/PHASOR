@@ -29,6 +29,38 @@ test('all preset materials exist in the material table', () => {
   }
 });
 
+// A preset may declare `symmetry: [axis,...]` so the viewer mirrors the solved
+// quadrant out to the full model (viz3d). That is only physically honest if each
+// declared plane (the axis MIN face) is ADIABATIC — otherwise the mirror would
+// fabricate a boundary condition that wasn't solved. Gate it: no Robin/Dirichlet
+// BC may select an axis-min symmetry face, and an adiabatic 'rest' catch-all must
+// exist to carry those faces.
+function selectsAxisMin(select, axis) {
+  if (select === 'rest' || select == null) return false;
+  if (select.facesInside) return false; // interior voids, not a domain face
+  if (select.axis === axis && select.side === 'min') return true;
+  if (select.faces && select.faces.includes(`${axis}=min`)) return true;
+  return false;
+}
+
+test('symmetry presets declare only adiabatic mirror planes', () => {
+  for (const make of Object.values(presets)) {
+    const preset = make();
+    if (!preset.symmetry) continue;
+    const hasAdiabaticRest = preset.bcs.some((b) => b.select === 'rest' && b.type === 'adiabatic');
+    assert.ok(hasAdiabaticRest,
+      `${preset.name}: declares symmetry but has no adiabatic 'rest' catch-all`);
+    for (const axis of preset.symmetry) {
+      for (const bc of preset.bcs) {
+        if (bc.type === 'adiabatic') continue;
+        assert.ok(!selectsAxisMin(bc.select, axis),
+          `${preset.name}: symmetry plane ${axis}=min is bound by non-adiabatic BC '${bc.name}' ` +
+          `(type ${bc.type}) — mirroring it would fabricate physics`);
+      }
+    }
+  }
+});
+
 test('wall1d: layer faces are grid lines, layer cell counts exact', () => {
   const preset = presets.wall1d();
   const { grid, painted } = paintPreset(preset);

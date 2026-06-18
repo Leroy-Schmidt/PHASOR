@@ -335,6 +335,10 @@ export function basement3d({
       z: { mandatory: [0, roomHalfDepth, zWallOuter, D], maxH, refinePoints: [roomHalfDepth, zWallOuter] },
     },
     extent: { x: [0, W], y: [0, H], z: [0, D] },
+    // quarter-symmetry planes (x=0, z=0): both adiabatic ('cuts'), so the viewer
+    // may mirror the solved quadrant out to the full cellar for DISPLAY only
+    // (viz3d). The model.test gate enforces that declared planes are adiabatic.
+    symmetry: ['x', 'z'],
   };
 }
 

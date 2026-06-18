@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { cellIndex, nodeIndex } from './grid.mjs';
+import { symmetryTransforms, mirroredExtent } from './symmetry.mjs';
 
 export class Viz3D {
   /** @param {HTMLElement} container */
@@ -25,9 +26,13 @@ export class Viz3D {
     this.scene.add(sun);
 
     this.clipPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 1e6);
-    this.group = null;
+    this.groups = [];  // voxel groups: [base, ...symmetry mirrors] (one per reflection)
     this.extent = null;
-    this.field = null; // in-scene field slice plane (M4): { mesh, texture, data, key }
+    // quarter-symmetry mirror (M5 full-cellar view): the reflection transforms
+    // applied to the solved quadrant for DISPLAY. null/[] → no mirror (one copy).
+    this.symmetryAxes = null;
+    this.mirrorTransforms = [{ scale: [1, 1, 1], offset: [0, 0, 0] }];
+    this.field = null; // in-scene field slice plane (M4): { mesh, texture, data, key, mirrors }
 
     // render on demand: redraw only on camera moves, resizes, model changes
     this.render = () => this.renderer.render(this.scene, this.camera);
@@ -68,20 +73,38 @@ export class Viz3D {
    * @param {{x:number[], y:number[], z:number[]}} extent
    */
   showModel(grid, painted, materials, backgroundId, extent) {
-    if (this.group) {
-      this.group.traverse((o) => {
-        if (o.isMesh) {
-          o.geometry.dispose();
-          o.material.dispose();
-        }
-      });
-      this.scene.remove(this.group);
-    }
+    this._disposeGroups();
     this._disposeField(); // a new model invalidates the old field plane
-    this.group = new THREE.Group();
     this.extent = extent;
 
-    // count cells per material index
+    // reflection transforms: identity + symmetry mirrors (display-only). Stored
+    // so setFieldSlice mirrors the field plane the same way.
+    this.mirrorTransforms = (this.symmetryAxes && this.symmetryAxes.length)
+      ? symmetryTransforms(this.symmetryAxes, extent)
+      : [{ scale: [1, 1, 1], offset: [0, 0, 0] }];
+
+    for (const tr of this.mirrorTransforms) {
+      const group = this._makeVoxelGroup(grid, painted, materials, backgroundId);
+      // reflection (scale ±1, offset 2·plane) maps the quadrant onto its mirror;
+      // identity transform leaves the solved quadrant in place.
+      group.matrixAutoUpdate = false;
+      group.matrix.makeScale(...tr.scale).setPosition(...tr.offset);
+      this.scene.add(group);
+      this.groups.push(group);
+    }
+
+    // frame the WHOLE mirrored model so the full cellar is in view
+    const view = (this.symmetryAxes && this.symmetryAxes.length)
+      ? mirroredExtent(this.symmetryAxes, extent) : extent;
+    this.frame(view);
+    // resize() renders at the correct size; if the container isn't sized yet
+    // the constructor's rAF kick will render this model once it is.
+    this.resize();
+  }
+
+  /** Build one Group of per-material InstancedMeshes (the solved quadrant). */
+  _makeVoxelGroup(grid, painted, materials, backgroundId) {
+    const group = new THREE.Group();
     const counts = new Array(painted.matIds.length).fill(0);
     for (let c = 0; c < painted.cells.length; c++) counts[painted.cells[c]]++;
 
@@ -115,14 +138,27 @@ export class Viz3D {
         }
       }
       mesh.instanceMatrix.needsUpdate = true;
-      this.group.add(mesh);
+      group.add(mesh);
     }
-    this.scene.add(this.group);
-    this.frame(extent);
-    // resize() renders at the correct size; if the container isn't sized yet
-    // the constructor's rAF kick will render this model once it is.
-    this.resize();
+    return group;
   }
+
+  _disposeGroups() {
+    for (const g of this.groups) {
+      g.traverse((o) => {
+        if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); }
+      });
+      this.scene.remove(g);
+    }
+    this.groups = [];
+  }
+
+  /**
+   * Declare the symmetry axes of the next-loaded preset (e.g. ['x','z']). When
+   * set, showModel renders the solved quadrant mirrored out to the full model
+   * (display only — no re-solve). Pass null/[] to show the bare quadrant.
+   */
+  setSymmetry(axes) { this.symmetryAxes = axes && axes.length ? axes : null; }
 
   /** Aim the camera at the model bounds (only on preset change). */
   frame(extent) {
@@ -200,10 +236,13 @@ export class Viz3D {
       mesh.position.set(xmin + spanX / 2, ymin + spanY / 2, zCoord);
       mesh.renderOrder = 10; // drawn after the voxels
       this.scene.add(mesh);
-      this.field = { mesh, texture, data, texW, texH, key };
+      this.field = { mesh, texture, data, texW, texH, key, mirrors: null };
     } else {
       this.field.mesh.position.z = zCoord;
     }
+    // mirror the field plane onto the symmetry copies (shares geometry + texture,
+    // so the breathing field updates on every copy from the one texture refill)
+    this._updateFieldMirrors(xmin + spanX / 2, ymin + spanY / 2, zCoord);
 
     // per-texel: void → transparent; solid → bilinear field sample + colormap
     const { data, texW: tw, texH: th } = this.field;
@@ -244,6 +283,34 @@ export class Viz3D {
     this.render();
   }
 
+  /**
+   * Position the field-plane mirror clones to match the symmetry copies. Clones
+   * share the base mesh's geometry + material (+ texture), so the per-tick
+   * texture refill paints all of them; only their matrices need updating. Each
+   * clone's world transform is the reflection R composed with the base plane's
+   * translation, so the field lands on the correct mirrored slice.
+   */
+  _updateFieldMirrors(cx, cy, zCoord) {
+    if (!this.field) return;
+    const mirrors = this.mirrorTransforms.slice(1); // [0] is the identity = base mesh
+    if (!this.field.mirrors || this.field.mirrors.length !== mirrors.length) {
+      if (this.field.mirrors) for (const c of this.field.mirrors) this.scene.remove(c);
+      this.field.mirrors = mirrors.map(() => {
+        const c = this.field.mesh.clone(); // shares geometry + material + texture
+        c.matrixAutoUpdate = false;
+        c.renderOrder = 10;
+        this.scene.add(c);
+        return c;
+      });
+    }
+    const base = new THREE.Matrix4().makeTranslation(cx, cy, zCoord);
+    const R = new THREE.Matrix4();
+    for (let i = 0; i < mirrors.length; i++) {
+      R.makeScale(...mirrors[i].scale).setPosition(...mirrors[i].offset);
+      this.field.mirrors[i].matrix.copy(R).multiply(base);
+    }
+  }
+
   /** Remove the in-scene field plane (e.g. on geometry change before a re-solve). */
   clearFieldSlice() {
     this._disposeField();
@@ -252,6 +319,7 @@ export class Viz3D {
 
   _disposeField() {
     if (!this.field) return;
+    if (this.field.mirrors) for (const c of this.field.mirrors) this.scene.remove(c);
     this.scene.remove(this.field.mesh);
     this.field.mesh.geometry.dispose();
     this.field.mesh.material.dispose();

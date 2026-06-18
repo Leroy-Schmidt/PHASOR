@@ -37,11 +37,10 @@ instead of being argued with. One line each, date + idea.
   out the 0–365 d color scale and hides the near-surface gradient. Mask/clamp nodes
   with |T̂| < ε·(max amp) in the phase map. The line probe (G3.2 instrument) and the
   amplitude / T(t) maps are unaffected. Small, contained fix in viz2d/lineprobe.
-- 2026-06-18 — **Play/pause continuous time scroll** (Operator QoL ask, M4+): a
-  play button on the scrubber that advances time continuously (rAF loop over the
-  scrub fraction) so the field animates hands-free. Pure phasor eval — same
-  solve-free 30 fps path the manual scrubber already uses; just drive
-  `scrubRange.value` on a rAF and call `applyScrub()`. Stop on pause / manual drag.
+- 2026-06-18 — **Play/pause continuous time scroll** (Operator QoL ask, M4+) —
+  **DONE 2026-06-19** (polish D2, `b2faa82`): ▶/⏸ button drives a rAF loop over
+  the solve-free scrub path (`advanceFraction` in `src/scrub.mjs`); stops on pause
+  / manual drag. Smooth-animation heartbeat is the Operator's visual gate.
 - 2026-06-18 — UX: **sliders feel dead** (Operator feedback; M4) — **DONE M4**:
   (1) Solve button retired, geometry changes auto-resolve in the Worker
   (`onChange` previews geometry, `onFinishChange` fires one solve); (2)

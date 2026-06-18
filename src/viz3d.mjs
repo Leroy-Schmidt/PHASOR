@@ -2,7 +2,7 @@
 // material voxels with a movable clip plane. Gains in-scene slice planes in M4.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { cellIndex } from './grid.mjs';
+import { cellIndex, nodeIndex } from './grid.mjs';
 
 export class Viz3D {
   /** @param {HTMLElement} container */
@@ -27,6 +27,7 @@ export class Viz3D {
     this.clipPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 1e6);
     this.group = null;
     this.extent = null;
+    this.field = null; // in-scene field slice plane (M4): { mesh, texture, data, key }
 
     // render on demand: redraw only on camera moves, resizes, model changes
     this.render = () => this.renderer.render(this.scene, this.camera);
@@ -76,6 +77,7 @@ export class Viz3D {
       });
       this.scene.remove(this.group);
     }
+    this._disposeField(); // a new model invalidates the old field plane
     this.group = new THREE.Group();
     this.extent = extent;
 
@@ -138,6 +140,123 @@ export class Viz3D {
     this.camera.far = span * 50;
     this.camera.updateProjectionMatrix();
     this.controls.update();
+  }
+
+  /**
+   * Paint a temperature/amplitude/phase field ONTO the model as an in-scene slice
+   * plane (DESIGN §6 — the M4 headline). The plane mirrors the 2D SlicePanel's
+   * field exactly (same values, range, colormap), so the field breathes on the 3D
+   * model as the scrubber sweeps — no second physics path, no re-solve.
+   *
+   * Geometry (an XY quad at the slice z) is rebuilt only when the model or slice
+   * position changes; the per-scrub-tick call just refills the texture, which is
+   * cheap enough for ≥ 30 fps (G4.1).
+   *
+   * @param {{grid: object, painted: object, materials: object}} model
+   * @param {Float64Array} T nodal field for this model's grid
+   * @param {[number, number]} range [lo, hi] used by the colormap (panel's range)
+   * @param {(t: number) => [number, number, number]} cm colormap (colormap.mjs)
+   * @param {number} fracZ slice position along z, 0..1 of the z extent
+   */
+  setFieldSlice(model, T, range, cm, fracZ) {
+    if (!T || !range) { this.clearFieldSlice(); return; }
+    const { grid, painted, materials } = model;
+    const { xs, ys, zs, nx, ny, nz } = grid;
+    const xmin = xs[0];
+    const ymin = ys[0];
+    const spanX = xs[nx] - xmin;
+    const spanY = ys[ny] - ymin;
+
+    // nearest node plane (field) and the cell layer it reads materials from
+    const zCoord = zs[0] + fracZ * (zs[nz] - zs[0]);
+    let kNode = 0;
+    for (let k = 1; k <= nz; k++) {
+      if (Math.abs(zs[k] - zCoord) < Math.abs(zs[kNode] - zCoord)) kNode = k;
+    }
+    const kCell = Math.min(kNode, nz - 1);
+
+    // texture resolution: square-ish texels, capped so a scrub tick stays cheap
+    const MAX = 256;
+    const aspect = spanX / spanY;
+    const texW = Math.max(8, Math.round(aspect >= 1 ? MAX : MAX * aspect));
+    const texH = Math.max(8, Math.round(aspect >= 1 ? MAX / aspect : MAX));
+    const key = `${nx}x${ny}x${nz}@${kNode}:${texW}x${texH}:${spanX},${spanY}`;
+
+    if (!this.field || this.field.key !== key) {
+      this._disposeField();
+      const data = new Uint8Array(texW * texH * 4);
+      const texture = new THREE.DataTexture(data, texW, texH, THREE.RGBAFormat);
+      texture.flipY = false;        // row 0 = bottom (y = ymin) ↔ plane v = 0
+      texture.colorSpace = THREE.SRGBColorSpace; // colormap bytes are display sRGB
+      texture.magFilter = THREE.NearestFilter;
+      texture.minFilter = THREE.NearestFilter;
+      texture.generateMipmaps = false;
+      const geom = new THREE.PlaneGeometry(spanX, spanY);
+      const mat = new THREE.MeshBasicMaterial({
+        map: texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
+        depthTest: false, // overlay the field on the model from any orbit angle
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.set(xmin + spanX / 2, ymin + spanY / 2, zCoord);
+      mesh.renderOrder = 10; // drawn after the voxels
+      this.scene.add(mesh);
+      this.field = { mesh, texture, data, texW, texH, key };
+    } else {
+      this.field.mesh.position.z = zCoord;
+    }
+
+    // per-texel: void → transparent; solid → bilinear field sample + colormap
+    const { data, texW: tw, texH: th } = this.field;
+    const [lo, hi] = range;
+    const inv = hi > lo ? 1 / (hi - lo) : 0;
+    const colCell = new Int32Array(tw);
+    for (let c = 0, i = 0; c < tw; c++) {
+      const x = xmin + ((c + 0.5) / tw) * spanX;
+      while (i < nx - 1 && x > xs[i + 1]) i++;
+      while (i > 0 && x < xs[i]) i--;
+      colCell[c] = i;
+    }
+    for (let r = 0; r < th; r++) {
+      const y = ymin + ((r + 0.5) / th) * spanY;
+      let j = 0;
+      while (j < ny - 1 && y > ys[j + 1]) j++;
+      const ty = (y - ys[j]) / (ys[j + 1] - ys[j]);
+      for (let c = 0; c < tw; c++) {
+        const i = colCell[c];
+        const o = 4 * (r * tw + c);
+        if (!materials[painted.matIds[painted.cells[cellIndex(grid, i, j, kCell)]]]) {
+          data[o + 3] = 0; // void — transparent
+          continue;
+        }
+        const x = xmin + ((c + 0.5) / tw) * spanX;
+        const tx = (x - xs[i]) / (xs[i + 1] - xs[i]);
+        const v00 = T[nodeIndex(grid, i, j, kNode)];
+        const v10 = T[nodeIndex(grid, i + 1, j, kNode)];
+        const v01 = T[nodeIndex(grid, i, j + 1, kNode)];
+        const v11 = T[nodeIndex(grid, i + 1, j + 1, kNode)];
+        const v = (1 - ty) * ((1 - tx) * v00 + tx * v10) + ty * ((1 - tx) * v01 + tx * v11);
+        if (!Number.isFinite(v)) { data[o + 3] = 0; continue; } // masked → voxel shows through
+        const [cr, cg, cb] = cm((v - lo) * inv);
+        data[o] = cr; data[o + 1] = cg; data[o + 2] = cb; data[o + 3] = 255;
+      }
+    }
+    this.field.texture.needsUpdate = true;
+    this.render();
+  }
+
+  /** Remove the in-scene field plane (e.g. on geometry change before a re-solve). */
+  clearFieldSlice() {
+    this._disposeField();
+    this.render();
+  }
+
+  _disposeField() {
+    if (!this.field) return;
+    this.scene.remove(this.field.mesh);
+    this.field.mesh.geometry.dispose();
+    this.field.mesh.material.dispose();
+    this.field.texture.dispose();
+    this.field = null;
   }
 
   /**

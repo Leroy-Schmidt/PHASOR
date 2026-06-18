@@ -4,51 +4,14 @@
 // and the time scrubber, all evaluated client-side by superposition — never a
 // re-solve (DESIGN §3.5). Shows the material map until a field arrives.
 import { cellIndex, nodeIndex } from './grid.mjs';
-import { amplitude, timeLag } from './physics.mjs';
+import { amplitude, timeLagRelative } from './physics.mjs';
+import { diverging, sequential } from './colormap.mjs';
 
-// compact coolwarm-style diverging map: cold blue → neutral → warm red
-const STOPS = [
-  [59, 76, 192],
-  [221, 221, 221],
-  [180, 4, 38],
-];
-
-function diverging(t) {
-  const s = t <= 0 ? 0 : t >= 1 ? 1 : t;
-  const seg = s < 0.5 ? 0 : 1;
-  const f = (s - seg * 0.5) * 2;
-  const a = STOPS[seg];
-  const b = STOPS[seg + 1];
-  return [
-    Math.round(a[0] + (b[0] - a[0]) * f),
-    Math.round(a[1] + (b[1] - a[1]) * f),
-    Math.round(a[2] + (b[2] - a[2]) * f),
-  ];
-}
-
-// sequential map (dark → accent → pale) for magnitude-like fields (amplitude,
-// phase lag) where zero is meaningful and a diverging midpoint would mislead
-const SEQ = [
-  [13, 24, 59],
-  [38, 86, 140],
-  [62, 156, 161],
-  [158, 211, 142],
-  [247, 240, 180],
-];
-
-function sequential(t) {
-  const s = t <= 0 ? 0 : t >= 1 ? 1 : t;
-  const x = s * (SEQ.length - 1);
-  const seg = Math.min(SEQ.length - 2, Math.floor(x));
-  const f = x - seg;
-  const a = SEQ[seg];
-  const b = SEQ[seg + 1];
-  return [
-    Math.round(a[0] + (b[0] - a[0]) * f),
-    Math.round(a[1] + (b[1] - a[1]) * f),
-    Math.round(a[2] + (b[2] - a[2]) * f),
-  ];
-}
+// Phase-lag map: nodes whose amplitude is below this fraction of the peak amp
+// carry no meaningful phase (|T̂|→0 ⇒ arg is numerical noise). Mask them so the
+// deep, near-zero interior doesn't blow out the color scale (e.g. >½ of the
+// diurnal corner2d domain is dead) and hide the real near-surface gradient.
+const PHASE_AMP_FLOOR = 0.02;
 
 // marching-squares segment table; edges E0 bottom, E1 right, E2 top, E3 left,
 // corner bits c0 bl, c1 br, c2 tr, c3 tl (ambiguous 5/10 → two segments)
@@ -107,6 +70,11 @@ export class SlicePanel {
     this._cm = diverging;    // active colormap
     this._field = 'materials'; // header label for the current field
 
+    // M4: mirror the displayed field onto the in-scene 3D plane. Fired whenever
+    // the field (or slice position) changes — including every scrub tick — with
+    // { T, range, cm, frac }. index.html forwards it to Viz3D.setFieldSlice.
+    this.onFieldUpdate = null;
+
     // Rendering triggers. ResizeObserver alone is not enough: if the panel is
     // first laid out at 0×0 (tab restored, DevTools open then closed, tiling
     // WM, a collapsed flex item) its callback can be missed, leaving the canvas
@@ -124,6 +92,13 @@ export class SlicePanel {
     }
   }
 
+  /** Notify the 3D field plane of the current displayed field / slice position. */
+  _emitField() {
+    if (this.onFieldUpdate) {
+      this.onFieldUpdate({ T: this.T, range: this.range, cm: this._cm, frac: this.frac });
+    }
+  }
+
   setModel(model) {
     this.model = model;
     this.T = null;
@@ -132,6 +107,7 @@ export class SlicePanel {
     this.harmonics = [];
     this._field = 'materials';
     this.requestRender();
+    this._emitField();
   }
 
   /** [min, max] of `values` over nodes touching a solid cell. */
@@ -170,6 +146,7 @@ export class SlicePanel {
     this.range = this.rangeOverSolid(T);
     this.note.textContent = '';
     this.requestRender();
+    this._emitField();
   }
 
   /**
@@ -200,7 +177,9 @@ export class SlicePanel {
 
   /** Derive the displayed field (values, unit, colormap, header) from state. */
   _recompute() {
-    if (!this.mean) { this.T = null; this.range = null; this.requestRender(); return; }
+    if (!this.mean) {
+      this.T = null; this.range = null; this.requestRender(); this._emitField(); return;
+    }
     const n = this.mean.length;
     const vals = new Float64Array(n);
     if (this.mode === 'instant') {
@@ -230,18 +209,28 @@ export class SlicePanel {
         for (let i = 0; i < n; i++) vals[i] = amplitude(h.re[i], h.im[i]);
         this.unit = 'K';
         this._field = `amplitude |T̂| [K] — ${h.f}`;
-      } else { // phase lag
+      } else { // phase lag, referenced to the outdoor forcing (surface ≈ 0)
         const period = (2 * Math.PI) / h.omega;
         const toUnit = period > 2 * 86400 ? 86400 : 3600; // days for annual, hours for diurnal
         const ul = toUnit === 86400 ? 'days' : 'hours';
-        for (let i = 0; i < n; i++) vals[i] = timeLag(h.re[i], h.im[i], h.omega) / toUnit;
+        const refPhase = Math.atan2(h.refIm ?? 0, h.refRe ?? 1);
+        // mask low-amplitude nodes (NaN) — their phase is meaningless noise
+        const amp = new Float64Array(n);
+        for (let i = 0; i < n; i++) amp[i] = amplitude(h.re[i], h.im[i]);
+        const floor = PHASE_AMP_FLOOR * this.rangeOverSolid(amp)[1];
+        for (let i = 0; i < n; i++) {
+          vals[i] = amp[i] < floor
+            ? NaN
+            : timeLagRelative(h.re[i], h.im[i], h.omega, refPhase) / toUnit;
+        }
         this.unit = ul;
-        this._field = `phase lag τ [${ul}] — ${h.f}`;
+        this._field = `phase lag τ [${ul}] vs outdoor — ${h.f}`;
       }
     }
     this.T = vals;
     this.range = this.rangeOverSolid(vals);
     this.requestRender();
+    this._emitField();
   }
 
   clearField(message = '') {
@@ -252,11 +241,13 @@ export class SlicePanel {
     this._field = 'materials';
     this.note.textContent = message;
     this.requestRender();
+    this._emitField();
   }
 
   setSlice(frac) {
     this.frac = Math.min(1, Math.max(0, frac));
     this.requestRender();
+    this._emitField();
   }
 
   render() {
@@ -330,6 +321,7 @@ export class SlicePanel {
         let r;
         let g;
         let b;
+        let v;
         if (this.T) {
           const x = xmin + (q + 0.5 - ox) / scale;
           const tx = (x - xs[i]) / (xs[i + 1] - xs[i]);
@@ -337,9 +329,12 @@ export class SlicePanel {
           const v10 = this.T[nodeIndex(grid, i + 1, j, kNode)];
           const v01 = this.T[nodeIndex(grid, i, j + 1, kNode)];
           const v11 = this.T[nodeIndex(grid, i + 1, j + 1, kNode)];
-          const v = (1 - ty) * ((1 - tx) * v00 + tx * v10) + ty * ((1 - tx) * v01 + tx * v11);
+          v = (1 - ty) * ((1 - tx) * v00 + tx * v10) + ty * ((1 - tx) * v01 + tx * v11);
+        }
+        if (this.T && Number.isFinite(v)) {
           [r, g, b] = this._cm((v - lo) * inv);
         } else {
+          // no field, or a masked (phase-undefined) node: show the material color
           const c = mat.color ?? 0x808080;
           r = (c >> 16) & 255;
           g = (c >> 8) & 255;
@@ -378,6 +373,9 @@ export class SlicePanel {
             this.T[nodeIndex(grid, i + 1, j + 1, kNode)], // c2 tr
             this.T[nodeIndex(grid, i, j + 1, kNode)],  // c3 tl
           ];
+          // skip cells touching a masked (phase-undefined) node — no real contour
+          if (!(Number.isFinite(v[0]) && Number.isFinite(v[1])
+                && Number.isFinite(v[2]) && Number.isFinite(v[3]))) continue;
           const idx = (v[0] >= L ? 1 : 0) | (v[1] >= L ? 2 : 0) |
                       (v[2] >= L ? 4 : 0) | (v[3] >= L ? 8 : 0);
           const segs = SEGS[idx];

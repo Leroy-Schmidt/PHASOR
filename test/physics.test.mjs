@@ -7,7 +7,7 @@ import { MATERIALS } from '../src/model.mjs';
 import {
   uValue, wallSeriesResistance, fRsi, psiExternal,
   OMEGA_ANNUAL, OMEGA_DIURNAL, penetrationDepth, semiInfinite,
-  climatePhasor, amplitude, timeLag, phasorEval,
+  climatePhasor, amplitude, timeLag, timeLagRelative, phasorEval,
 } from '../src/physics.mjs';
 
 const close = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`);
@@ -109,6 +109,22 @@ test('amplitude / timeLag: a lagging phasor reports a positive lag', () => {
   // lag is normalized into [0, period): a near-+π phase wraps to a long lag
   const lag = timeLag(Math.cos(3), Math.sin(3), OMEGA_DIURNAL);
   assert.ok(lag >= 0 && lag < 2 * Math.PI / OMEGA_DIURNAL, `lag ${lag} in [0,period)`);
+});
+
+test('timeLagRelative: a phasor in sync with its reference reports ≈ 0 lag', () => {
+  // refPhase = 0 recovers the absolute lag
+  close(timeLagRelative(1, 0, OMEGA_ANNUAL, 0), timeLag(1, 0, OMEGA_ANNUAL), 1e-9, 'φ_ref=0 ≡ absolute');
+  // a phasor whose arg EQUALS the reference is in sync → zero relative lag, even
+  // though its absolute lag is large (the corner2d surface = the forcing case)
+  const refPhase = Math.PI - OMEGA_ANNUAL * 15 * 86400; // annual climate (min day 15)
+  const re = Math.cos(refPhase);
+  const im = Math.sin(refPhase);
+  close(timeLagRelative(re, im, OMEGA_ANNUAL, refPhase), 0, 1e-6, 'surface in sync → 0 d');
+  assert.ok(timeLag(re, im, OMEGA_ANNUAL) > 150 * 86400, 'but its absolute lag is ~½ year');
+  // an extra −1 rad beyond the reference is a genuine inward lag of 1/ω seconds
+  const re2 = Math.cos(refPhase - 1);
+  const im2 = Math.sin(refPhase - 1);
+  close(timeLagRelative(re2, im2, OMEGA_ANNUAL, refPhase), 1 / OMEGA_ANNUAL, 1e-6, 'extra 1 rad lag');
 });
 
 test('phasorEval: reconstructs T̄ + Re[T̂ e^{iωt}] (DESIGN §2.5 sign)', () => {

@@ -63,6 +63,13 @@
     font-variant-numeric: tabular-nums; }
   #status { position: absolute; left: 10px; bottom: 8px; color: var(--accent);
     font-variant-numeric: tabular-nums; pointer-events: none; }
+  .export-btn { background: #20242b; color: var(--text); border: 1px solid #2d323b;
+    border-radius: 4px; font: 11px system-ui, sans-serif; padding: 2px 7px;
+    cursor: pointer; }
+  .export-btn:hover { border-color: var(--accent); }
+  #slices summary .export-actions { float: right; display: inline-flex; gap: 6px; }
+  #view .export-actions { position: absolute; right: 10px; top: 10px;
+    display: flex; gap: 6px; z-index: 2; }
 </style>
 <script type="importmap">
 {
@@ -85,7 +92,7 @@
   </div>
 
 <script type="module">
-import { buildGrid, paintBoxes } from './src/grid.mjs';
+import { buildGrid, paintBoxes, cellIndex } from './src/grid.mjs';
 import { MATERIALS, presets, layersWithInsulation } from './src/model.mjs';
 import { Viz3D } from './src/viz3d.mjs';
 import { SlicePanel } from './src/viz2d.mjs';
@@ -107,12 +114,43 @@ function makeSection(title, open) {
   d.open = open;
   const summary = document.createElement('summary');
   summary.textContent = title;
+  const actions = document.createElement('span'); // export buttons live here
+  actions.className = 'export-actions';
+  summary.appendChild(actions);
   const body = document.createElement('div');
   body.className = 'panel-body';
   d.append(summary, body);
   slicesEl.appendChild(d);
-  return { details: d, body };
+  return { details: d, body, actions };
 }
+
+// --- export (M4): PNG of any panel, CSV of the line probe. Tiny download helper.
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function exportCanvasPNG(canvas, filename) {
+  canvas.toBlob((b) => { if (b) downloadBlob(b, filename); }, 'image/png');
+}
+function exportText(text, filename, mime = 'text/csv') {
+  downloadBlob(new Blob([text], { type: mime }), filename);
+}
+function addExportBtn(parent, label, title, onClick) {
+  const b = document.createElement('button');
+  b.className = 'export-btn';
+  b.textContent = label;
+  b.title = title;
+  b.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); onClick(); });
+  parent.appendChild(b);
+  return b;
+}
+const stamp = () => current?.name ?? 'phasor';
 
 const mapSec = makeSection('Field map (slice)', true);
 const probeSec = makeSection('Line probe (profile)', true);
@@ -120,6 +158,31 @@ const slices = new SlicePanel(mapSec.body);
 const probe = new LineProbe(probeSec.body);
 mapSec.details.addEventListener('toggle', () => slices.requestRender());
 probeSec.details.addEventListener('toggle', () => probe.requestRender());
+
+// M4 headline: paint the panel's field onto the 3D model. The panel is the
+// single source of the displayed field; every change (mode, freq, scrub tick)
+// emits here and the in-scene slice plane mirrors it — the field breathes on
+// the 3D model with no second physics path and no re-solve.
+let currentModel = null;
+slices.onFieldUpdate = (f) => {
+  if (currentModel) viz.setFieldSlice(currentModel, f.T, f.range, f.cm, f.frac);
+};
+
+// export buttons: PNG on each panel + the 3D view, CSV on the line probe
+addExportBtn(mapSec.actions, '⤓ PNG', 'Download the slice map as PNG',
+  () => exportCanvasPNG(slices.canvas, `${stamp()}-slice.png`));
+addExportBtn(probeSec.actions, '⤓ PNG', 'Download the line profile as PNG',
+  () => exportCanvasPNG(probe.canvas, `${stamp()}-profile.png`));
+addExportBtn(probeSec.actions, '⤓ CSV', 'Download the line-probe data as CSV', () => {
+  const csv = probe.toCSV();
+  if (csv) exportText(csv, `${stamp()}-lineprobe.csv`);
+  else status.textContent = 'Line probe — solve first, then export CSV';
+});
+const viewActions = document.createElement('div');
+viewActions.className = 'export-actions';
+document.getElementById('view').appendChild(viewActions);
+addExportBtn(viewActions, '⤓ PNG', 'Download the 3D view as PNG',
+  () => { viz.render(); exportCanvasPNG(viz.renderer.domElement, `${stamp()}-3d.png`); });
 
 const readoutsWrap = document.createElement('div');
 readoutsWrap.id = 'readouts-wrap';
@@ -160,14 +223,34 @@ scrubModeBtn.addEventListener('click', () => {
 let current = null; // { name, params }
 let seq = 0;        // solve sequence — bumping it invalidates in-flight results
 
+// Does the painted geometry change along z? (If not, the slice-z control is a
+// no-op and gets hidden.) True only when some column differs across z layers.
+function geometryVariesInZ(grid, painted) {
+  if (grid.nz < 2) return false;
+  for (let j = 0; j < grid.ny; j++) {
+    for (let i = 0; i < grid.nx; i++) {
+      const c0 = painted.cells[cellIndex(grid, i, j, 0)];
+      for (let k = 1; k < grid.nz; k++) {
+        if (painted.cells[cellIndex(grid, i, j, k)] !== c0) return true;
+      }
+    }
+  }
+  return false;
+}
+
 function loadPreset(name, params = {}) {
   const preset = presets[name](params);
   const grid = buildGrid(preset.gridSpec);
   const painted = paintBoxes(grid, preset.boxes, preset.background);
   viz.showModel(grid, painted, MATERIALS, preset.background, preset.extent);
   const m = { grid, painted, materials: MATERIALS };
+  currentModel = m;
   slices.setModel(m);
   probe.setModel(m);
+  // hide controls that don't apply: insulation (per preset) and slice-z (only
+  // useful when the geometry actually varies along z — none of the current
+  // presets do, so it stays hidden rather than reading as a dead control).
+  ui.refreshControls(name, geometryVariesInZ(grid, painted));
   current = { name, params };
   status.textContent =
     `${name} — ${grid.nx}×${grid.ny}×${grid.nz} = ${grid.nx * grid.ny * grid.nz} cells`;
@@ -201,6 +284,7 @@ worker.onmessage = (e) => {
   } else if (m.type === 'result') {
     const harmonics = (m.harmonics ?? []).map((h) => ({
       f: h.f, omega: h.omega, re: new Float64Array(h.re), im: new Float64Array(h.im),
+      refRe: h.refRe, refIm: h.refIm, // outdoor forcing phasor → phase-lag reference
     }));
     const mean = new Float64Array(m.T);
     slices.setSolution({ mean, harmonics });
@@ -251,21 +335,23 @@ const ui = buildUI(Object.keys(presets), {
   },
   onClip: (axis, frac) => viz.setClip(axis, frac),
   onInsulation: (t) => {
+    // live geometry preview while dragging ("look before you solve"); the solve
+    // fires once on release via onInsulationCommit — no solve flood, no freeze.
     loadPreset(current.name, { layers: layersWithInsulation(t) });
     viz.setClip(ui.clipAxis, ui.clipPosition);
-    invalidate('geometry changed — press Solve');
+    invalidate('updating…');
   },
+  onInsulationCommit: () => solve(),
   onSlice: (frac) => slices.setSlice(frac),
   onField: (mode) => slices.setMode(mode),
   onFreq: (f) => { slices.setFreq(OMEGA[f]); probe.setFreq(OMEGA[f]); },
   onFreqToggle: (f, on) => slices.setEnabled(f, on),
-  onSolve: () => solve(),
 });
 
 loadPreset(ui.preset, { layers: layersWithInsulation(ui.insulation) });
 slices.setSlice(ui.sliceZ);
 solve();
-window.__phasor = { viz, slices, loadPreset, solve, ui }; // debug handle (console / tests)
+window.__phasor = { viz, slices, probe, loadPreset, solve, ui }; // debug handle (console / tests)
 </script>
 </body>
 </html>

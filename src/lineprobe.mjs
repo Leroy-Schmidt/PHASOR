@@ -56,6 +56,36 @@ export function lineIndices(grid, axis) {
 
 const AXIS_NAME = ['x', 'y (depth)', 'z'];
 
+/**
+ * Serialize a line-probe profile to CSV (M4 export). Pure — DOM-free, unit-tested.
+ * Columns: distance [m], mean T̄ [°C], then per harmonic Re, Im, |T̂| [K]. The
+ * caller passes the same line-sampled arrays the plot draws, so the file matches
+ * the picture exactly (mean profile + the phasor that the scrubber animates).
+ * @param {string} axisName label for the distance column (e.g. 'y (depth)')
+ * @param {ArrayLike<number>} dist distances along the line [m]
+ * @param {ArrayLike<number>} meanV T̄ along the line
+ * @param {{f: string, re: ArrayLike<number>, im: ArrayLike<number>}[]} harmonics
+ * @returns {string} CSV text (header row + one row per sample, '\n'-joined)
+ */
+export function lineProbeCSV(axisName, dist, meanV, harmonics = []) {
+  const header = [`${axisName} [m]`, 'T_mean [C]'];
+  for (const h of harmonics) {
+    header.push(`${h.f}_Re [K]`, `${h.f}_Im [K]`, `${h.f}_amp [K]`);
+  }
+  const fmt = (v) => (Number.isFinite(v) ? String(v) : '');
+  const rows = [header.join(',')];
+  for (let s = 0; s < dist.length; s++) {
+    const row = [fmt(dist[s]), fmt(meanV[s])];
+    for (const h of harmonics) {
+      const re = h.re[s];
+      const im = h.im[s];
+      row.push(fmt(re), fmt(im), fmt(Math.hypot(re, im)));
+    }
+    rows.push(row.join(','));
+  }
+  return rows.join('\n');
+}
+
 /** "Nice" tick step covering `range` with ~target ticks: {1,2,5}·10^m. */
 function niceStep(range, target = 6) {
   const raw = range / Math.max(target, 1);
@@ -127,6 +157,12 @@ export class LineProbe {
     if (this.freqOmega == null && this.lineHarm.length) this.freqOmega = this.lineHarm[0].omega;
     this._selectFreq();
     this.requestRender();
+  }
+
+  /** CSV of the current profile (mean + all sampled harmonics), or null if empty. */
+  toCSV() {
+    if (!this.meanV) return null;
+    return lineProbeCSV(AXIS_NAME[this.axis], this.dist, this.meanV, this.lineHarm);
   }
 
   setFreq(omega) { this.freqOmega = omega; this._selectFreq(); this.requestRender(); }

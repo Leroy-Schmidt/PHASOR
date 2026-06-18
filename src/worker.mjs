@@ -185,14 +185,21 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
       // harmonic solves per frequency (annual, diurnal). Tre/Tim ship as
       // transferable buffers; the UI superposes them for T(t) / amplitude /
       // phase-lag without ever re-solving (DESIGN §2.5, §3.5).
+      // exterior Robin region — its complex phasor per frequency is the outdoor
+      // forcing whose phase the phase-lag map references (so the surface reads ≈0).
+      const extBc = presetDef.bcs.find((b) => b.name === 'exterior' && b.type === 'robin');
+
       const harmonics = [];
       const transfer = [out.T.buffer];
       for (const f of ['annual', 'diurnal']) {
         const omega = OMEGA_BY_FREQ[f];
         self.postMessage({ id, type: 'progress', iter: 0, relRes: NaN, phase: f });
         const h = solveHarmonic(presetDef, MATERIALS, { omega, tol });
+        const extHarm = (extBc?.T?.harmonics ?? []).find((hh) => hh.f === f);
+        const ref = extHarm ? climatePhasor(extHarm, omega) : { re: 1, im: 0 };
         harmonics.push({
           f, omega, re: h.Tre.buffer, im: h.Tim.buffer,
+          refRe: ref.re, refIm: ref.im,
           iterations: h.iterations, relRes: h.relRes, converged: h.converged,
         });
         transfer.push(h.Tre.buffer, h.Tim.buffer);

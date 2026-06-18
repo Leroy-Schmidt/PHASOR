@@ -112,14 +112,26 @@ export function amplitude(re, im) {
 }
 
 /**
- * Time lag τ = −arg(T̂)/ω (DESIGN §2.6), normalized into [0, period) so a
- * lagging field always reports a non-negative lag in seconds.
+ * Time lag τ relative to a reference phase: τ = −(arg(T̂) − φ_ref)/ω, normalized
+ * into [0, period). With φ_ref = arg of the driving (outdoor) phasor this reports
+ * the lag a physicist expects — the exterior surface, in sync with the forcing,
+ * reads ≈ 0 and the lag grows inward. φ_ref = 0 recovers the absolute lag from
+ * the global phase zero (midnight Jan 1).
  */
-export function timeLag(re, im, omega) {
+export function timeLagRelative(re, im, omega, refPhase = 0) {
   const period = (2 * Math.PI) / omega;
-  let tau = (-Math.atan2(im, re) / omega) % period;
+  let tau = (-(Math.atan2(im, re) - refPhase) / omega) % period;
   if (tau < 0) tau += period;
   return tau;
+}
+
+/**
+ * Absolute time lag τ = −arg(T̂)/ω (DESIGN §2.6), normalized into [0, period) so a
+ * lagging field always reports a non-negative lag in seconds. Measured from the
+ * global phase zero; see timeLagRelative for lag relative to the outdoor forcing.
+ */
+export function timeLag(re, im, omega) {
+  return timeLagRelative(re, im, omega, 0);
 }
 
 /**

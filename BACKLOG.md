@@ -21,23 +21,39 @@ instead of being argued with. One line each, date + idea.
   (it's physical, not discretization). G3.2 is therefore pinned on the phase
   *lag* (the September timing, robust). If a quantitative amplitude-decay readout
   is wanted, sample well above the bottom or model deeper.
-- 2026-06-18 — Phase-lag colormap (M4 polish): on `basement` the τ map spans
-  0–365 d because deep nodes (|T̂|→0 at the Dirichlet) have ill-defined, wrapping
-  phase, which blows out the color scale and hides the meaningful near-surface
-  gradient. Mask/ξ-clamp low-amplitude nodes (e.g. |T̂| < ε of the surface amp)
-  in the phase map. The line probe — the G3.2 instrument — is unaffected.
-- 2026-06-18 — UX: **sliders feel dead** (Operator feedback; M4 "interaction"
-  milestone). Three causes: (1) geometry changes need a manual **Solve** press →
-  pull M4 auto-resolve forward (solve on lil-gui `onFinishChange`); (2)
-  **Insulation [m]** is a no-op on `basement`/`soil_rod` (no insulation) and on
-  `slab_junction` (ignores `layers`) — hide/disable controls that don't apply to
-  the active preset, or wire insulation to `slab_junction`'s eps; (3) **Clip**
-  only moves the 3D view and **Slice z** barely moves on thin extruded presets —
-  label/scope per preset.
-- 2026-06-18 — **Field colors ON the 3D model** (Operator ask; M4): today the
-  heatmap lives on the flat 2D side-panels. Render the T / amplitude / phase
-  field onto the three.js geometry (vertex colors or an in-scene slice-plane
-  texture). This is DESIGN §6 M4 "in-scene slice planes."
+- 2026-06-18 — **Phase-lag map is correct but unintuitive** — **DONE M4** (fixed
+  this session: `timeLagRelative` referenced to the outdoor forcing → surface ≈ 0,
+  + low-amplitude mask kills the deep-node noise; verified corner2d annual/diurnal
+  + basement annual; covers both causes below). Kept for the record. TWO causes,
+  confirmed on corner2d/annual:
+  (1) **Absolute reference.** τ = −arg(T̂)/ω is measured from midnight Jan 1, not
+  from the outdoor signal. The climate peaks ~197.6 d after Jan 1, so the exterior
+  *surface* — which is perfectly in sync with the forcing — reads **197.6 d**, not
+  the 0 d a physicist expects. Fix: display lag **relative to the exterior forcing
+  phase** (subtract the climate harmonic's own arg), so the surface → ~0 and the
+  interior shows the genuine extra delay (corner ~2 d; basement ~2-month September
+  story). (2) **Low-amplitude phase noise.** Where the interior is held constant
+  (corner2d, basement) deep nodes have |T̂|→0 and wrapping/garbage phase that blows
+  out the 0–365 d color scale and hides the near-surface gradient. Mask/clamp nodes
+  with |T̂| < ε·(max amp) in the phase map. The line probe (G3.2 instrument) and the
+  amplitude / T(t) maps are unaffected. Small, contained fix in viz2d/lineprobe.
+- 2026-06-18 — **Play/pause continuous time scroll** (Operator QoL ask, M4+): a
+  play button on the scrubber that advances time continuously (rAF loop over the
+  scrub fraction) so the field animates hands-free. Pure phasor eval — same
+  solve-free 30 fps path the manual scrubber already uses; just drive
+  `scrubRange.value` on a rAF and call `applyScrub()`. Stop on pause / manual drag.
+- 2026-06-18 — UX: **sliders feel dead** (Operator feedback; M4) — **DONE M4**:
+  (1) Solve button retired, geometry changes auto-resolve in the Worker
+  (`onChange` previews geometry, `onFinishChange` fires one solve); (2)
+  **Insulation [m]** now hidden on presets that ignore it (basement/soil_rod/
+  slab_junction), shown on wall1d/corner2d; (3) **Slice z** hidden when the
+  geometry is z-uniform (all current presets) — re-appears for a true-3D preset.
+  Clip stays (it visibly clips the voxels).
+- 2026-06-18 — **Field colors ON the 3D model** (Operator ask; M4) — **DONE M4**:
+  `Viz3D.setFieldSlice` paints an in-scene XY slice plane (DataTexture) mirroring
+  the 2D panel's field/range/colormap; breathes with the scrubber. DESIGN §6
+  "in-scene slice planes." (Vertex-coloring the voxels remains a possible future
+  alternative if a fuller volumetric paint is ever wanted.)
 - 2026-06-18 — **Genuinely volumetric 3D basement** (Operator ask; new preset,
   beyond M3's 2D-extruded ψ presets): a real cellar with a finite room + corners
   in a full 3D soil block. Engine/grid/painter are already 3D — main risk is grid

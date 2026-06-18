@@ -268,4 +268,74 @@ export function basement({
   };
 }
 
-export const presets = { wall1d, corner2d, slab_junction, basement, soil_rod };
+/**
+ * `basement3d` — the genuinely VOLUMETRIC cellar (M5 showcase). The 2D
+ * `basement` above is a thin z-extruded cross-section (the fast path for the
+ * annual-cycle / f_Rsi physics); this is a real room with a finite footprint
+ * and a true 3D corner where two below-grade walls meet — the signature
+ * geometric thermal bridge that only exists in 3D.
+ *
+ * Modeled on QUARTER SYMMETRY: x=0 and z=0 are vertical symmetry planes through
+ * the room center (adiabatic, free in FEM), so the quarter domain holds exactly
+ * one vertical wall–wall corner plus the floor–wall–wall trihedral corner while
+ * the grid is 4× smaller than a full cellar. The room occupies the near corner
+ * (small x, small z); the L-shaped wall wraps its two outer (+x, +z) sides; the
+ * floor slab sits under the whole footprint; soil fills the rest, padded
+ * ≥ 3·δ_annual (~9 m) laterally (x→W, z→D) and below (y→0, deep Dirichlet T_mean).
+ * The ground surface (y = H = grade) carries the external climate phasors.
+ *
+ * Same painter trick and BC selectors as `basement` — `facesInside` picks the
+ * carved room's inner faces, the far soil faces + the two symmetry planes fall
+ * into the adiabatic `cuts`. No psiSpec: ψ is a 2D/linear quantity; this preset
+ * reports f_Rsi and Φ (the 2D presets remain the ψ instrument).
+ *
+ * `maxH` grades coarse into the deep/far soil (refinePoints cluster cells at the
+ * structure) so the ≥9-m-each-way domain stays affordable; raise it for a faster
+ * (coarser) solve, lower it for a finer field. The default 0.8 m (~14 k nodes,
+ * ~4.7 s isolated re-solve) is the finest grid under the 5 s budget — the steady
+ * ground-loss solve is long-range and dominates. A finer field (maxH 0.5 ≈ 32 k
+ * nodes, ~18 s) is the motivating use case for the M5 WASM-SIMD/WebGPU matvec
+ * (DESIGN §3.5 "only if a real use case exceeds the budget"); see BACKLOG.
+ */
+export function basement3d({
+  soilPad = 9, soilDepth = 9, roomHalfWidth = 2.0, roomHalfDepth = 2.0,
+  wallThickness = 0.3, roomHeight = 2.5, slabThickness = 0.2, maxH = 0.8,
+} = {}) {
+  const xWallOuter = roomHalfWidth + wallThickness;
+  const zWallOuter = roomHalfDepth + wallThickness;
+  const W = xWallOuter + soilPad;
+  const D = zWallOuter + soilPad;
+  const yFloorBottom = soilDepth;
+  const yFloorTop = yFloorBottom + slabThickness;
+  const H = yFloorTop + roomHeight;       // grade at y = H
+  const Tmean = CLIMATE.external.T.mean;
+
+  return {
+    name: 'basement3d',
+    boxes: [
+      { name: 'soil', x: [0, W], y: [0, H], z: [0, D], material: 'soil' },
+      { name: 'floor', x: [0, xWallOuter], y: [yFloorBottom, yFloorTop], z: [0, zWallOuter], material: 'concrete' },
+      // L-shaped wall around the room's two outer sides (boxes overlap in the
+      // corner — both concrete, harmless under the painter).
+      { name: 'wallX', x: [roomHalfWidth, xWallOuter], y: [yFloorTop, H], z: [0, zWallOuter], material: 'concrete' },
+      { name: 'wallZ', x: [0, xWallOuter], y: [yFloorTop, H], z: [roomHalfDepth, zWallOuter], material: 'concrete' },
+      { name: 'room', x: [0, roomHalfWidth], y: [yFloorTop, H], z: [0, roomHalfDepth], material: 'air' },
+    ],
+    background: 'air',
+    bcs: [
+      { name: 'interior', select: { facesInside: true }, type: 'robin', ...CLIMATE.internal },
+      { name: 'exterior', select: { axis: 'y', side: 'max' }, type: 'robin', ...CLIMATE.external },
+      { name: 'deep', select: { axis: 'y', side: 'min' }, type: 'dirichlet', value: Tmean },
+      // 'rest' = the two symmetry planes (x=0, z=0) + the far soil faces (x=W, z=D).
+      { name: 'cuts', select: 'rest', type: 'adiabatic' },
+    ],
+    gridSpec: {
+      x: { mandatory: [0, roomHalfWidth, xWallOuter, W], maxH, refinePoints: [roomHalfWidth, xWallOuter] },
+      y: { mandatory: [0, yFloorBottom, yFloorTop, H], maxH, refinePoints: [yFloorTop, H] },
+      z: { mandatory: [0, roomHalfDepth, zWallOuter, D], maxH, refinePoints: [roomHalfDepth, zWallOuter] },
+    },
+    extent: { x: [0, W], y: [0, H], z: [0, D] },
+  };
+}
+
+export const presets = { wall1d, corner2d, slab_junction, basement, basement3d, soil_rod };

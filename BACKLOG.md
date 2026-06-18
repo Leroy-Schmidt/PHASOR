@@ -54,12 +54,22 @@ instead of being argued with. One line each, date + idea.
   the 2D panel's field/range/colormap; breathes with the scrubber. DESIGN §6
   "in-scene slice planes." (Vertex-coloring the voxels remains a possible future
   alternative if a fuller volumetric paint is ever wanted.)
-- 2026-06-18 — **Genuinely volumetric 3D basement** (Operator ask; new preset,
-  beyond M3's 2D-extruded ψ presets): a real cellar with a finite room + corners
-  in a full 3D soil block. Engine/grid/painter are already 3D — main risk is grid
-  size / solve time (≥ 3·δ each way in three dimensions is large) → needs perf
-  care (M5 WASM/WebGPU matvec is the escape hatch). The thin-slice presets are
-  the fast 2D path for thermal-bridge numbers; this is the showcase version.
+- 2026-06-18 — **Genuinely volumetric 3D basement** — **DONE M5** (`basement3d`
+  preset, quarter-symmetry cellar with a real 3D wall–wall + trihedral corner; 3
+  gates green, Slice-z + in-scene field plane light up for free). A real cellar
+  with a finite room + corners in a full 3D soil block. Engine/grid/painter were
+  already 3D — the risk was grid size / solve time, and it bit: see next item.
+- 2026-06-18 — **M5 #2: WASM-SIMD / WebGPU matvec** (the escape hatch, NOT chained
+  into the `basement3d` session — one M5 item per session). Motivating use case
+  now exists and is measured: `basement3d` at the **fine** maxH 0.5 grid (30×32×30
+  = 31.7 k nodes) takes **18.2 s** isolated, OVER the 5 s budget — the steady
+  ground-loss solve dominates (~11.5 s / 287 CG it, a long-range deep-Dirichlet
+  sink). The shipped default coarsens to maxH 0.8 (14.4 k nodes, 4.7 s) to stay
+  interactive. To run the fine field interactively, port the matrix-free element
+  apply (`applyA` / `applyAComplex`, already deduplicated — chosen in M0 to port
+  cleanly) to WASM-SIMD or a WebGPU compute matvec. DESIGN §3.5 trigger met
+  ("only if a real use case exceeds the budget"). Measure isolated, not in
+  `node --test`. A whole M5 session on its own.
 - 2026-06-18 — `slab_junction` is the **aggressive flush, fully-exposed** slab
   (ψ≈1.0 W/(m·K), balcony-class). To match a milder "intermediate-floor,
   interrupted-insulation" catalogue figure (~0.5–0.7), recess the slab behind the

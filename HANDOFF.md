@@ -1,126 +1,89 @@
-# PHASOR — session kickoff: solver performance (M5 #2, acceleration)
+# PHASOR — session kickoff: S2-M1.2 heat-flow visualization
 
-Read DESIGN.md (§3.3–§3.5 numerics + budget), VALIDATION.md, CLAUDE.md,
-OPERATOR_NOTES.md, and `git log --oneline -12`. The instrument is feature-complete;
-this session is about **making the fine volumetric cellar interactive** without
-breaking a single gate.
+Read `ROADMAP.md` (the Stage-2 plan — it's the priority layer above BACKLOG),
+CLAUDE.md, VALIDATION.md (tail), and `git log --oneline -8`. **Stage 1 (M0–M5) is
+sealed.** Stage 2 is the teaching + validation build, governed by ROADMAP.md, with
+one hard constraint: maximize the odds of a working app while keeping Operator
+involvement low — so almost everything is gated headlessly and the Operator only
+signs pre-built proofs.
 
-## State you're inheriting (recover from here)
-- **M0–M4 sealed**; `basement3d` (volumetric quarter-symmetry cellar) shipped as
-  the M5 stretch, plus a polish increment (stable colormap, play/pause, full-cellar
-  symmetry mirror). `node --test` **94/94**.
-- All of it is committed **locally on `main`** up to the polish commits but **not
-  pushed/tagged** — `git push origin main` is blocked for the agent; the Operator
-  pushes and tags. Don't assume a remote is up to date.
-- The instrument: 6 presets (wall1d, corner2d, slab_junction, basement,
-  **basement3d**, soil_rod); steady + harmonic solves in a Web Worker; solve-free
-  scrubbing (≥30 fps phasor eval); 2D slice + line probe + 3D voxels with an
-  in-scene field plane that breathes with the scrubber; PNG/CSV export. Readouts:
-  ψ (external dims), f_Rsi, Φ.
+## State you're inheriting (Stage-2 kickoff session, 2026-06-19)
+- **ROADMAP.md written** — approved detailed Stage-2 plan: S2-M1 (flux & heat-loss
+  story, the hero) → S2-M2 (performance) → S2-M3 (box-based custom geometry) →
+  S2-M4 (UI) → S2-M5 (Wärmebrücken detail catalogue, stretch). Track T1 = a
+  separate Norm-Explainer app. Per-milestone gates + forecasts are in there.
+- **S2-M1.1 DONE** (`7c6a766`): new `src/flux.mjs` — the heat-flux field, the
+  single source of truth for the heat-flow viz AND the annual-loss curve:
+  - `cellFlux(problem, T)` → `{qx,qy,qz,nx,ny,nz}` cell-centre q = −λ∇T (real).
+  - `cellFluxComplex(problem, Tre, Tim)` → re/im flux phasor q̂ = −λ∇T̂.
+  - `regionFlux(problem, q, region)` → envelope integral; equals `boundaryFlux`
+    (fem.mjs) on the exact `wall1d` solution (the independent-oracle gate G1.1d).
+  - Recovery = trilinear gradient at the cell centre = face-mean difference per
+    axis; exact for linear fields. One additive `fem.mjs` line: `face.cell`.
+  - Gates G1.1a/b/d/e green (`test/flux.test.mjs`, written gate-first).
+- **Process guardrails BAKED + ENFORCED** (`f420b2f`, `2e7dab0`): the Operator's
+  review checks are now machinery —
+  - `test/golden.test.mjs` pins steady readouts (f_Rsi/ψ/Φ, 4 presets) at rel 1e-6
+    → a "no-op" change that moves physics fails the suite (#5).
+  - `tools/guardrails.mjs`: `node --test` must show fail/skipped/todo = 0 and
+    count ≥ **103**; then blocks any removed/loosened tolerance line in
+    `test/`+`src/` unless `GUARDRAILS_ALLOW_TOL_CHANGE=1` (Operator sign-off ONLY)
+    (#4 + #3). Dogfooded (loosen 1e-7→1e-3 → blocked).
+  - Wired as `.githooks/pre-commit` (active via `git config core.hooksPath
+    .githooks`; re-run that once on a fresh clone). Rule is in CLAUDE.md invariants.
+- `node --test`: **103 pass, 0 fail, 0 skipped, 0 todo.**
+- **Not pushed/tagged.** All four commits are local on `main` (`git push` blocked
+  for the agent — the Operator pushes/tags). Recent: `2e7dab0` LF pin, `f420b2f`
+  guardrails, `7c6a766` flux, `0a724fd` roadmap+backlog.
 
-## The problem (why this session exists)
-`basement3d` ships at a **coarse** default (maxH 0.8, 14.4 k nodes, ~4.7 s) because
-the **fine** grid (maxH 0.5, 31.7 k nodes) re-solves in **~18–19 s**, over the
-DESIGN §3.5 **5 s** budget. This is the documented trigger for the WASM/WebGPU
-matvec — but **profile before you port** (Operator decision below).
+## Your job this session: S2-M1.2 — heat-flow visualization (the early-priority crowd-pleaser)
+The flux field exists and is gated; now make it visible. Two steps, in order:
 
-Baseline from `tools/perf.mjs basement3d 0.5` (isolated; reproduce it first):
+1. **`tools/proof.mjs` FIRST** (the reusable verification harness — biggest
+   leverage, gates this viz and every later one). It should: boot the dev server
+   (`tools/devserver.mjs` on :8123; `preview_start phasor`), drive the app to fixed
+   states, capture the **2D panel** via `canvas.toBlob` + `preview_eval`, scrape
+   the on-screen readouts to JSON, run pixel assertions, and write
+   `proofs/s2-mX/` (PNGs + a one-page `index.html`) for the Operator to sign.
+   Why the 2D panel: it's plain `<canvas>` so the agent can read its pixels;
+   `viz3d.mjs` is WebGL and CANNOT be screenshotted here (lean on Operator's eyes).
+2. **Heat-flow rendering in `viz2d.mjs`**: (a) dynamic **|q| magnitude colormap**
+   driven by the existing solve-free scrub path (`scrub.mjs`, never re-solves —
+   DESIGN §3.5); (b) a **vector-glyph / streamline** layer toggle. Put the glyph
+   LAYOUT generator in `flux.mjs` (pure → unit-tested), render in viz2d.
 
-| stage              | ms    | iters | ms/iter |
-|--------------------|-------|-------|---------|
-| steady (display)   | ~7200 | 287   | ~25     |
-| steady (R_si=0.25) | ~7200 | 287   | ~25     |
-| annual (COCG)      | ~3400 | 231   | ~15     |
-| diurnal (COCG)     | ~1300 | 74    | ~17     |
-| **TOTAL**          | ~19 k |       |         |
+### Gates to write FIRST (S2-M1.2)
+- **G1.2a (auto):** colormap value→RGB unit-tested (extend `colormap.mjs`).
+- **G1.2b (auto):** glyph generator — direction == normalized −∇T, length ∝
+  clamped |q|, count == sampling stride — tested against the flux array.
+- **G1.2c (agent-visual, via `proof.mjs`):** `toBlob` pixel assertions — the
+  high-|q| band at the thermal bridge is brighter than the field interior; the
+  glyph layer is non-empty over the envelope. (No human.)
+- **S2-H1.2 (human, batched):** Operator glances at the proof sheet — "looks like
+  heat flowing around the corner" + the 3D-WebGL view. (ROADMAP touchpoint 2.)
 
-f_Rsi 0.160, Φ_ext 198.07 W — keep these fixed; a "faster but wrong" result moves them.
+## Standing rules (don't relearn the hard way)
+- **Gates before features; tolerances are law.** Write the gate first. **Run
+  `node tools/guardrails.mjs` before claiming green and before every commit** — it
+  is the pre-commit hook now. Never set `GUARDRAILS_ALLOW_TOL_CHANGE` without the
+  Operator's sign-off this session. Raise `MIN_TESTS` when you add gates.
+- **One subgoal per session**, `node --test` green + committed between.
+- **2D = agent-verifiable (toBlob pixels); 3D WebGL = human channel.** Don't try to
+  screenshot WebGL here.
+- **Performance (S2-M2) is still open**, deliberately deferred behind M1 (it's the
+  prereq for M3, not M1). Tier-0 baseline is captured in BACKLOG/VALIDATION: fine
+  `basement3d` (maxH 0.5, 31.7 k nodes) ~19–21 s, two steady solves dominate at 287
+  CG iters — preconditioner-first (multigrid V-cycle; Jacobi-CG stays the certified
+  fallback). Don't chain it into M1. Measure isolated via `tools/perf.mjs`.
+- **Scope watch:** one gentle flag for out-of-scope / sloped / later-milestone work
+  (custom geometry stays **box-based** — DESIGN §1 forbids CAD/STL/unstructured),
+  then respect the choice; park ideas in BACKLOG.md.
+- **Windows:** node on PATH; `git push origin main` blocked for the agent —
+  Operator pushes/tags. Copyrighted norm PDFs (`norms/`) and the Trittschall
+  explainer app are gitignored — keep them out of git (IP bright line).
 
-## The one rule that frames this session
-**A performance change must be a within-tolerance behavioral no-op.** It may not
-move any physics result beyond solver tolerance, and it may **never** loosen a
-gate tolerance (CLAUDE.md: tolerances are law). If a tolerance "needs" loosening,
-the optimization is wrong, not the test.
-
-## Operator decision (2026-06-19): profile-first, pure-JS-first
-Exhaust pure-JS wins before any WASM/WebGPU. Honors the no-build-step invariant +
-OPERATOR_NOTES §9 and keeps everything headless-gateable as long as possible. Pick
-the lever from **attribution data**, not assumption.
-
-### The key insight
-**~14.4 s of the ~19 s is the two steady solves, at 287 CG iterations each.** Two
-independent levers:
-- **Fewer iterations** — a better *preconditioner*. Attacks conditioning.
-- **Faster matvec** — WASM-SIMD / WebGPU / JS micro-opt. Speeds each iteration but
-  does **not** reduce the 287.
-
-The steady solve looks iteration-bound, and `basement3d` is nearly uniform-λ (soil
-2.0 / concrete 2.1) — the regime where geometric multigrid behaves. A
-preconditioner is likely the bigger, lower-risk win, helps **both** steady solves,
-and needs zero new tooling. Try it before porting a matvec.
-
-## Tiered plan (in order; stop when the fine grid is < 5 s)
-- **Tier 0 — Profile.** `tools/perf.mjs` already exists and reproduces the
-  baseline above. Use it for every before/after; **always isolated, never in
-  `node --test`** (parallelism inflates wall-clock).
-- **Tier 1 — Pure JS (zero tooling, full `node --test` gating).**
-  - (a) **Preconditioner** for the steady solve (dominant cost): geometric
-    multigrid V-cycle on the rectilinear grid (or cheaper SSOR / block-Jacobi).
-    Likely `src/multigrid.mjs` + an optional preconditioner hook in `cg`/`cocg`
-    (`src/solver.mjs`). Keep Jacobi-CG as the certified fallback.
-  - (b) **Matvec micro-opts** in `scatterKHC` / `scatterKH` (`src/fem.mjs` ~L466):
-    SoA element tables, alloc hygiene, optional Float32 *iteration* copies (Float64
-    for the assembled load + readouts).
-- **Tier 2 — Port the matvec** (only if Tier 1 is insufficient AND profiling says
-  throughput-bound). Bring the WASM-vs-WebGPU choice back to the Operator **with
-  numbers**:
-  - *WASM-SIMD* — matrix-free apply ports cleanly (the M0 reason for matrix-free);
-    **Node runs `.wasm`, so equivalence + dense-LU gates run under `node --test`**.
-    Cost: a one-time toolchain to regenerate the `.wasm` (commit binary + source +
-    build command; serve-time stays build-free). Keep CG/COCG vector ops in JS.
-  - *WebGPU* — WGSL is runtime-compiled (best no-build-step fit) but can't be gated
-    headlessly and forces the *whole* solver onto the GPU (matvec + dots + axpy).
-    Larger surface, weaker gates. Reserve for a decisive GPU win.
-
-## How to gate it (backend-agnostic; write the equivalence gate FIRST)
-**Correctness (every accelerated path, before merge):**
-- **G-A Operator equivalence** vs the canonical JS `applyA` / `applyAComplex`
-  (`src/fem.mjs`): random vectors on a graded multi-material grid (basement3d-like),
-  real (ω=0) < 1e-12 relative, complex (ω>0) < 1e-10. JS apply is the oracle. WASM →
-  `node --test`; WebGPU → a `preview_eval` harness. *(A preconditioner keeps the
-  operator identical — gate it via G-B/G-C/G-D instead.)*
-- **G-B Dense-LU certification** — rerun G2.3 (`cocg` vs `denseLUSolveComplex`
-  < 1e-8) with the new apply / preconditioner.
-- **G-C All existing gates green with acceleration ENABLED**, tolerances unchanged.
-- **G-D Determinism** — each preset solved JS-vs-accelerated, fields agree to solver
-  tol (regression test).
-- **G-E Fallback** — feature-detect; unavailable backend → automatic JS fallback;
-  app still works (test the branch).
-
-**Performance (the goal):**
-- **G-P** `basement3d` fine (maxH 0.5) full re-solve **< 5 s** isolated via
-  `tools/perf.mjs`; report the per-stage + iteration breakdown. Secondary: **no
-  regression on wall1d / corner2d** (no fixed-overhead penalty on small solves).
-
-## Why this is low-risk: the seam already exists
-- `cg` / `cocg` take `apply` as a **function** (`src/solver.mjs`) → an accelerated
-  apply or a preconditioner hook slots in with no solver-structure change.
-- The kernel's data is already assembled + **deduplicated**:
-  `problem._elem.{KeList, CeList, cellElem}` (+ `EimList` per ω), `robinFaces`, the
-  `free` mask, `FACE_P` (`src/fem.mjs`). Pack into flat typed arrays once per solve.
-- `worker.mjs` selects the apply (feature-detect + flag); the scrub path is
-  untouched (solve-free, DESIGN §3.5).
-
-## Standing rules (don't relearn these the hard way)
-- **Gates before features; tolerances are law.** Write the equivalence/regression
-  gate before the optimization. One lever at a time, `node --test` green +
-  committed between.
-- **Measure isolated** (`tools/perf.mjs`), not in `node --test`.
-- **Windows:** node on PATH; `git push origin main` blocked for the agent — commit +
-  tag locally, the Operator pushes. Dev server `tools/devserver.mjs` on 8123
-  (`preview_start phasor`); WebGL can't be screenshotted here — use `canvas.toBlob`
-  + `preview_eval`, lean on the Operator's eyes for visuals.
-- **Scope watch:** one gentle flag for out-of-scope / sloped / later-milestone work,
-  then respect the choice; park good ideas in BACKLOG.md.
-- **Don't drift:** DESIGN §1 out-of-scope is still binding. This session is *one*
-  thing — make the fine cellar interactive without breaking a gate.
+## Open question to resolve before S2-M1.5
+Where do the 13370/12831 closed-form formulas live? Leaning **(a)** a pure
+`src/standards.mjs` inside PHASOR (keeps the "reproduce the 13370 annex" calibration
+gate inside `node --test`); (b) only in the Explainer app via the JSON seam.
+Confirm with the Operator before building the comparison panel.

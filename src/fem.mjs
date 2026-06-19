@@ -210,7 +210,7 @@ export function assemble(grid, painted, materials, bcs) {
               nijk.push([ia, ja, kp]);
             }
           }
-          const face = { axis, dir, coord, boundary: outside, area: hu * hv, nodes: nid };
+          const face = { axis, dir, coord, boundary: outside, area: hu * hv, nodes: nid, cell: i + nx * (j + ny * k) };
 
           for (const bc of bcs) {
             if (!selectorMatches(bc.select, face)) continue;

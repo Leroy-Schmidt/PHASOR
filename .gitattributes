@@ -1,0 +1,3 @@
+# Keep the shell hook LF-only so the `#!/bin/sh` shebang works after checkout on
+# any OS (a CRLF shebang fails silently as "/bin/sh\r: not found").
+.githooks/** text eol=lf

@@ -7,6 +7,12 @@ Invariants:
 - No time integration in the solver. Time-harmonic only. Convention e^{+iωt}; SI units.
 - Tests are law. Never weaken a tolerance, skip a gate, or mark a test todo without
   the Operator saying so in this session.
+- Process guardrails: run `node tools/guardrails.mjs` before claiming any subgoal/
+  milestone green and before every commit (it is the `.githooks/pre-commit` hook;
+  activate once with `git config core.hooksPath .githooks`). It enforces
+  fail/skipped/todo = 0, a non-decreasing test count, the golden physics readouts
+  (`test/golden.test.mjs`), and the tolerance tripwire. NEVER set
+  `GUARDRAILS_ALLOW_TOL_CHANGE` without explicit Operator sign-off this session.
 - Before claiming a milestone done: run `node --test`, paste the summary, and list
   which DESIGN.md gates it covers. Update VALIDATION.md.
 - Write tests for a gate BEFORE the feature where feasible.

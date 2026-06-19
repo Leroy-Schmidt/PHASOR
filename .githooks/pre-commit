@@ -1,0 +1,7 @@
+#!/bin/sh
+# PHASOR pre-commit guardrails. Activate once per clone:
+#   git config core.hooksPath .githooks
+# Runs the process robustness checks (#3 tolerance tripwire, #4 test discipline,
+# #5 golden numbers via the suite). A failing check blocks the commit. To make a
+# deliberate, Operator-approved tolerance change: GUARDRAILS_ALLOW_TOL_CHANGE=1 git commit ...
+exec node tools/guardrails.mjs

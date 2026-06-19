@@ -3,12 +3,17 @@
 Good ideas that are out of scope or belong to a later milestone land here
 instead of being argued with. One line each, date + idea.
 
+**Priority layer: see `ROADMAP.md`.** Items promoted to a Stage-2 milestone are
+tagged `→ ROADMAP S2-Mx` below; everything else is still raw parking lot. This
+keeps the backlog from rotting into a dumping ground — `ROADMAP.md` is the
+sequenced, gated plan; this file is the unsorted pool it draws from.
+
 - 2026-06-12 — Mesh quality (M1+): corner2d grading refines along each axis
   toward the inner corner, but cells along the outer→inner corner *diagonal*
   stay relatively coarse — exactly where the re-entrant cold spot / isotherm
   crowding lives. Don't tune blind; verify against G1.2 (O(h²)), G1.5 (f_Rsi
   monotonic), G2.1 once the solver exists, then refine the grading if needed.
-- 2026-06-16 — Basement steady ground heat loss (M3): the *total* steady flux to
+- 2026-06-16 — **→ ROADMAP S2-M1** (prerequisite, promoted 2026-06-19). Basement steady ground heat loss (M3): the *total* steady flux to
   the deep T_mean Dirichlet is long-range (a fixed-temperature sink, not a far
   field) — full domain-doubling moves it ~2.5 %, converging only ~1/depth. G3.1
   certifies the domain on the δ-governed periodic quantities (annual amplitude /
@@ -58,7 +63,7 @@ instead of being argued with. One line each, date + idea.
   gates green, Slice-z + in-scene field plane light up for free). A real cellar
   with a finite room + corners in a full 3D soil block. Engine/grid/painter were
   already 3D — the risk was grid size / solve time, and it bit: see next item.
-- 2026-06-18 — **M5 #2: WASM-SIMD / WebGPU matvec** (the escape hatch, NOT chained
+- 2026-06-18 — **→ ROADMAP S2-M2** (promoted 2026-06-19; now "Performance", preconditioner-first). **M5 #2: WASM-SIMD / WebGPU matvec** (the escape hatch, NOT chained
   into the `basement3d` session — one M5 item per session). Motivating use case
   now exists and is measured: `basement3d` at the **fine** maxH 0.5 grid (30×32×30
   = 31.7 k nodes) takes **18.2 s** isolated, OVER the 5 s budget — the steady
@@ -73,6 +78,26 @@ instead of being argued with. One line each, date + idea.
   (ψ≈1.0 W/(m·K), balcony-class). To match a milder "intermediate-floor,
   interrupted-insulation" catalogue figure (~0.5–0.7), recess the slab behind the
   eps or add an edge-insulation strip. Optional; G3.3 passed as-is.
+- 2026-06-19 — **Acoustics fork — reuse map** (stretch; brainstorm note, NOT M-scope).
+  The codebase is, at its core, a Helmholtz/Laplace FEM engine on a rectilinear
+  grid; room acoustics is a plausible second tenant. Decision: **fork and copy,
+  let duplication hurt, extract a shared core only once the seams are proven** —
+  do NOT build a generic multiphysics framework up front.
+  REUSE (carries over near-directly): `grid.mjs` (rectilinear grid + grading +
+  box painting); the matrix-free **apply-as-a-function seam** (solver takes
+  `apply`); **COCG** (driven Helmholtz is complex-symmetric, same form as the
+  thermal harmonic solve); element assembly for **K** (Laplacian = acoustic
+  stiffness) and **C↔M** (capacity matrix is structurally the mass matrix);
+  **Robin BC** machinery (acoustic impedance / radiation BCs are Robin-like); the
+  whole **test/perf-harness + VALIDATION/gates discipline**.
+  NEW (must build): an **eigensolver** (Lanczos / LOBPCG) — room modes are
+  Kφ=λMφ, an eigenproblem, not a linear solve, genuinely new; a new **physics
+  layer** (materials: density ρ + sound speed c instead of λ/ρc; dispersion k=ω/c);
+  new **readouts** (SPL, insertion loss, mode shapes, resonator coupling).
+  LEAVE OUT (as important as what goes in): the thermal standards layer
+  (13370/12831/f_Rsi/4108) — domain-specific, don't drag it along; thermal
+  vocabulary/units; and the assumption that the solver stack transfers wholesale
+  — the eigen path is a new beast the current COCG-only stack doesn't cover.
 - 2026-06-12 — Watch: orbit-rotate occasionally stalled with a `not-allowed`
   cursor. Applied preventive CSS (`user-select:none` on #view, `touch-action:none`
   + `-webkit-user-drag:none` on the canvas). If it resurfaces, suspect a

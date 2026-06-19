@@ -12,3 +12,9 @@ Thumbs.db
 # python scratch (tools/ oracle may grow a venv)
 __pycache__/
 .venv/
+
+# copyrighted reference standards — keep local, never publish (the IP bright line)
+norms/
+
+# the impact-sound explainer is its own project (ROADMAP track T1), not PHASOR
+EXAMPLE app Trittschall norm explainer and calculator/

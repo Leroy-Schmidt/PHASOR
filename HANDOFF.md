@@ -28,19 +28,23 @@ Stage 2 keeps Operator involvement low: gate headlessly, sign pre-built proofs.
   for the agent — Operator pushes/tags). **S2-H1.2 (human) reserved:** Operator
   glances at the three proof sheets + the live 3D view (ROADMAP touchpoint 2).
 
-## ⚠ Two decisions to make at the START of this session (ROADMAP touchpoint 3)
-You now have M1.4's reduction factor (0.24) in hand, which is what these needed:
-1. **Where the 13370/12831 closed forms live.** Recommend **(a)** a pure
-   `src/standards.mjs` inside PHASOR so the annex calibration gate runs under
-   `node --test` (ROADMAP leans (a)); vs (b) Explainer-app only via the M1.6 JSON
-   seam. *(The HANDOFF/Operator said "confirm before building the comparison
-   panel" — that's now.)*
-2. **Steady ground-loss scope.** The steady total flux to the deep Dirichlet is
-   ~1/depth converged (~2.5 % under the default grid; physics, not under-sizing —
-   BACKLOG 2026-06-16). Either (a) scope the 13370 comparison to the **periodic**
-   part and show the steady-U limitation on screen *(lower risk, ~0.85)*, or
-   (b) deepen the boundary / apply an ISO-13370 characteristic correction for a
-   converged steady U *(more effort, ~0.6)*.
+## Decisions LOCKED for M1.5 (Operator, 2026-06-22 — ROADMAP touchpoint 3)
+1. **Standards code lives in PHASOR:** a pure `src/standards.mjs` (13370/12831
+   closed forms), so the annex calibration gate runs under `node --test`. **IP
+   bright line:** norm PDFs / full tables stay gitignored (`norms/`) — only the
+   formulas and the single worked annex example go in code (cf. Trittschall
+   `references.js` / `verify.js`).
+2. **Pin down the steady baseline** (the higher-effort path, chosen deliberately):
+   get a *converged* steady ground-loss U to compare against 13370, by deepening
+   the deep-Dirichlet boundary substantially **or** applying the ISO-13370
+   characteristic-dimension / periodic-depth correction. Compare **both** steady
+   and periodic against the standard. This is the session's main risk (ROADMAP
+   ~0.6) — and it interacts with perf: a much deeper domain = bigger grid =
+   slower solve (mind G2.5 / the 5 s budget). Consider a **dedicated coarse
+   calibration solve** (deep + cheap) separate from the interactive display solve,
+   rather than deepening every preset. Validate convergence: the steady U should
+   stop moving as you deepen further (the opposite of the ~2.5 %/doubling drift
+   that motivated this).
 
 ## Your job this session: S2-M1.5 — comparison + the calibration gate
 Side-by-side: PHASOR earth / PHASOR air / DIN EN ISO 13370 annual-average /

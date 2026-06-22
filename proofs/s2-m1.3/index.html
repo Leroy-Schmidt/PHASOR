@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>PHASOR S2-M1.3 — harmonic-only view (single-ω swing, corner2d)</title>
+<style>
+  body{background:#0e1013;color:#cfd3d8;font:14px/1.5 system-ui,sans-serif;margin:0;padding:24px}
+  h1{font-size:18px;color:#e8a33d} .verdict{font-weight:700;padding:4px 10px;border-radius:4px}
+  .verdict.ok{background:#1d3a16;color:#9be07d} .verdict.bad{background:#3a1616;color:#e0533d}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:16px}
+  .card{background:#14161a;border-radius:8px;padding:12px} .card h2{font-size:14px;margin:0 0 8px}
+  .card img{width:100%;border-radius:4px;background:#000;image-rendering:pixelated}
+  .meta{font:11px ui-monospace,monospace;color:#8a919a;margin:8px 0;word-break:break-all}
+  .readouts{font-size:12px;color:#cfd3d8;margin:6px 0}
+  .checks{list-style:none;padding:0;margin:8px 0 0;font-size:12px}
+  .checks .ok{color:#9be07d} .checks .bad{color:#e0533d}
+</style>
+<h1>PHASOR S2-M1.3 — harmonic-only view (single-ω swing, corner2d) &nbsp; <span class="verdict ok">ALL PIXEL CHECKS PASS</span></h1>
+<p>2D-canvas proof sheet (the agent-verifiable channel). Glance + sign; then look at the live 3D view.</p>
+<div class="grid"><section class="card">
+      <h2>corner2d-harmonic-swing-winter</h2>
+      <img src="corner2d-harmonic-swing-winter.png" alt="corner2d-harmonic-swing-winter">
+      <div class="meta">{"preset":"corner2d","field":"Harmonic swing Δθ(t)","frequency":"annual","time":"~day 15 (winter)","scale":"±10.00 K (fixed symmetric)"}</div>
+      <div class="readouts">Harmonic-only view: Δθ(t) = Re[T̂_annual e^{iωt}], steady field removed. Winter (~day 15): exterior swings cool (39% blue, Δθ<0). Summer (~day 197): exterior swings warm (40% red, Δθ>0). ~60% neutral grey = the damped interior held at Δθ≈0 (DC removed). Fixed symmetric scale ±9.9995 K. corner2d steady readouts unchanged: f_Rsi 0.897 / ψ -0.0646.</div>
+      <ul class="checks"><li class="ok">✓ <b>sign-flip-breathes</b> — A cool 39.1%/warm 0.0% ↔ B cool 0.0%/warm 39.9% (lean ≥ 10%)</li><li class="ok">✓ <b>dc-removed-flat-interior</b> — neutral (Δθ≈0) 60.9% of solid pixels (> 30% — steady field removed)</li></ul>
+    </section></div>

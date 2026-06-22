@@ -1,0 +1,9 @@
+{
+  "W": 340,
+  "H": 278,
+  "range": [-9.999527098015072, 9.999527098015072],
+  "field": "Δθ(t) [K] — annual",
+  "winter": { "n": 38868, "warm": 0, "cool": 15211, "neutral": 23657, "warmPct": 0, "coolPct": 39.1, "neutralPct": 60.9 },
+  "summer": { "n": 38868, "warm": 15513, "cool": 0, "neutral": 23355, "warmPct": 39.9, "coolPct": 0, "neutralPct": 60.1 },
+  "readouts": "Harmonic-only view: Δθ(t) = Re[T̂_annual e^{iωt}], steady field removed. Winter (~day 15): exterior swings cool (39% blue, Δθ<0). Summer (~day 197): exterior swings warm (40% red, Δθ>0). ~60% neutral grey = the damped interior held at Δθ≈0 (DC removed). Fixed symmetric scale ±9.9995 K. corner2d steady readouts unchanged: f_Rsi 0.897 / ψ -0.0646."
+}

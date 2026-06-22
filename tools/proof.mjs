@@ -175,6 +175,27 @@ export function assertGlyphLayer(cap, { minFrac = 0.01 } = {}) {
   };
 }
 
+/**
+ * A signed (diverging) field flips sign with the scrubber: capture A is
+ * cool-dominant and capture B is warm-dominant (or vice versa). Confirms the
+ * harmonic-swing view shows the AC deviation about the mean (not a one-sided
+ * magnitude) and that it breathes with time. Captures carry warm/cool pixel
+ * counts (r−b and b−r over a margin) computed in-page.
+ */
+export function assertSignFlip(a, b, { minPct = 10 } = {}) {
+  const pct = (c) => (c.n ? { warm: (c.warm / c.n) * 100, cool: (c.cool / c.n) * 100 } : { warm: 0, cool: 0 });
+  const pa = pct(a);
+  const pb = pct(b);
+  const aCool = pa.cool - pa.warm; // >0 ⇒ A leans cool
+  const bWarm = pb.warm - pb.cool; // >0 ⇒ B leans warm
+  const pass = (aCool >= minPct && bWarm >= minPct) || (-aCool >= minPct && -bWarm >= minPct);
+  return {
+    pass, name: 'sign-flip-breathes',
+    detail: `A cool ${pa.cool.toFixed(1)}%/warm ${pa.warm.toFixed(1)}% ↔ `
+      + `B cool ${pb.cool.toFixed(1)}%/warm ${pb.warm.toFixed(1)}% (lean ≥ ${minPct}%)`,
+  };
+}
+
 /** data URL → raw PNG bytes (no decode, just strip the base64 header). */
 function dataURLToBuffer(dataURL) {
   const i = dataURL.indexOf(',');

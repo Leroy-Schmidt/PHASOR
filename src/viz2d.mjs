@@ -69,6 +69,7 @@ export class SlicePanel {
     this._cellLambda = null;
     this._fluxRange = null;
     this._fluxQ = null;  // last recovered flux (for the glyph overlay)
+    this._swingRange = null; // fixed ±|T̂|max for the harmonic-swing mode (S2-M1.3)
     this.glyphs = false; // flow-arrow overlay on/off
     // 3D field plane mirrors a NODAL field; in |q| mode it shows the
     // instantaneous T(t) (the 3D channel stays temperature) — kept here so the
@@ -365,6 +366,31 @@ export class SlicePanel {
       this.unit = '°C';
       this._cm = diverging;
       this._field = 'T(t) [°C]';
+    } else if (this.mode === 'swing') {
+      // Harmonic-only view (S2-M1.3): the single-frequency AC swing
+      // Δθ(t) = Re[T̂_ω e^{iωt}] = re·cos(ωt) − im·sin(ωt) — the steady field
+      // removed, one selected frequency, breathing with the scrubber. Signed, so
+      // a diverging map centred on 0; the scale is a FIXED symmetric ±|T̂|_max
+      // (time-invariant) so only the pattern moves, never the scale.
+      const h = this.harmonics.find((x) => x.omega === this.freqOmega) ?? this.harmonics[0];
+      this._cm = diverging;
+      if (!h) {
+        this.unit = '';
+        this._field = 'Δθ(t) (no harmonic)';
+        this._swingRange = [-0.5, 0.5];
+      } else {
+        const c = Math.cos(h.omega * this.time);
+        const s = Math.sin(h.omega * this.time);
+        const amp = new Float64Array(n);
+        for (let i = 0; i < n; i++) {
+          vals[i] = h.re[i] * c - h.im[i] * s;
+          amp[i] = amplitude(h.re[i], h.im[i]);
+        }
+        const A = this.rangeOverSolid(amp)[1];
+        this._swingRange = [-A, A];
+        this.unit = 'K';
+        this._field = `Δθ(t) [K] — ${h.f}`;
+      }
     } else {
       const h = this.harmonics.find((x) => x.omega === this.freqOmega) ?? this.harmonics[0];
       this._cm = sequential;
@@ -399,6 +425,9 @@ export class SlicePanel {
       // fixed envelope range — stable across scrub time (computed on solve)
       if (!this._instantRange) this._computeInstantRange();
       this.range = this._instantRange;
+    } else if (this.mode === 'swing') {
+      // fixed symmetric ±|T̂|_max — stable across scrub (set in the branch above)
+      this.range = this._swingRange;
     } else {
       // amplitude / phase: time-invariant already, scale to the field itself
       this.range = this.rangeOverSolid(vals);

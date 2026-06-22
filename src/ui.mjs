@@ -10,6 +10,7 @@ import GUI from 'lil-gui';
 // field-selector labels → internal mode ids consumed by SlicePanel
 export const FIELD_MODES = {
   'T(t) instantaneous': 'instant',
+  'Harmonic swing Δθ(t)': 'swing',
   'Amplitude |T̂|': 'amplitude',
   'Phase lag τ': 'phase',
   'Heat flow |q|': 'flux',
@@ -68,7 +69,7 @@ export function buildUI(presetNames, handlers) {
     .name('Field')
     .onChange((v) => handlers.onField(FIELD_MODES[v]));
   gui.add(state, 'freq', ['annual', 'diurnal'])
-    .name('Frequency (amp/phase)')
+    .name('Frequency (swing/amp/phase)')
     .onChange((v) => handlers.onFreq(v));
   // per-frequency toggles: which harmonics enter the instantaneous T(t) sum
   gui.add(state, 'incAnnual')

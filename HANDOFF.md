@@ -1,89 +1,72 @@
-# PHASOR — session kickoff: S2-M1.2 heat-flow visualization
+# PHASOR — session kickoff: S2-M1.3 harmonic-only view
 
-Read `ROADMAP.md` (the Stage-2 plan — it's the priority layer above BACKLOG),
-CLAUDE.md, VALIDATION.md (tail), and `git log --oneline -8`. **Stage 1 (M0–M5) is
-sealed.** Stage 2 is the teaching + validation build, governed by ROADMAP.md, with
-one hard constraint: maximize the odds of a working app while keeping Operator
-involvement low — so almost everything is gated headlessly and the Operator only
-signs pre-built proofs.
+Read `ROADMAP.md` (the Stage-2 plan — priority layer above BACKLOG), CLAUDE.md,
+VALIDATION.md (tail), and `git log --oneline -8`. **Stage 1 (M0–M5) is sealed.**
+Stage 2 is the teaching + validation build (ROADMAP), one hard constraint:
+maximize the odds of a working app while keeping Operator involvement low — so
+almost everything is gated headlessly and the Operator only signs pre-built proofs.
 
-## State you're inheriting (Stage-2 kickoff session, 2026-06-19)
-- **ROADMAP.md written** — approved detailed Stage-2 plan: S2-M1 (flux & heat-loss
-  story, the hero) → S2-M2 (performance) → S2-M3 (box-based custom geometry) →
-  S2-M4 (UI) → S2-M5 (Wärmebrücken detail catalogue, stretch). Track T1 = a
-  separate Norm-Explainer app. Per-milestone gates + forecasts are in there.
-- **S2-M1.1 DONE** (`7c6a766`): new `src/flux.mjs` — the heat-flux field, the
-  single source of truth for the heat-flow viz AND the annual-loss curve:
-  - `cellFlux(problem, T)` → `{qx,qy,qz,nx,ny,nz}` cell-centre q = −λ∇T (real).
-  - `cellFluxComplex(problem, Tre, Tim)` → re/im flux phasor q̂ = −λ∇T̂.
-  - `regionFlux(problem, q, region)` → envelope integral; equals `boundaryFlux`
-    (fem.mjs) on the exact `wall1d` solution (the independent-oracle gate G1.1d).
-  - Recovery = trilinear gradient at the cell centre = face-mean difference per
-    axis; exact for linear fields. One additive `fem.mjs` line: `face.cell`.
-  - Gates G1.1a/b/d/e green (`test/flux.test.mjs`, written gate-first).
-- **Process guardrails BAKED + ENFORCED** (`f420b2f`, `2e7dab0`): the Operator's
-  review checks are now machinery —
-  - `test/golden.test.mjs` pins steady readouts (f_Rsi/ψ/Φ, 4 presets) at rel 1e-6
-    → a "no-op" change that moves physics fails the suite (#5).
-  - `tools/guardrails.mjs`: `node --test` must show fail/skipped/todo = 0 and
-    count ≥ **103**; then blocks any removed/loosened tolerance line in
-    `test/`+`src/` unless `GUARDRAILS_ALLOW_TOL_CHANGE=1` (Operator sign-off ONLY)
-    (#4 + #3). Dogfooded (loosen 1e-7→1e-3 → blocked).
-  - Wired as `.githooks/pre-commit` (active via `git config core.hooksPath
-    .githooks`; re-run that once on a fresh clone). Rule is in CLAUDE.md invariants.
-- `node --test`: **103 pass, 0 fail, 0 skipped, 0 todo.**
-- **Not pushed/tagged.** All four commits are local on `main` (`git push` blocked
-  for the agent — the Operator pushes/tags). Recent: `2e7dab0` LF pin, `f420b2f`
-  guardrails, `7c6a766` flux, `0a724fd` roadmap+backlog.
+## State you're inheriting (S2-M1.2 done, 2026-06-22)
+- **S2-M1.2 — heat-flow visualization DONE** (all auto gates green; S2-H1.2 human
+  glance + tag reserved for the Operator):
+  - `src/colormap.mjs`: new **`flux`** heat ramp (dark→amber→pale, monotone
+    luminance). `src/flux.mjs`: pure **`fluxGlyphs(q, grid, k, {stride, scale})`**
+    arrow-layout generator. Gates G1.2a (+3) / G1.2b (+2), written first.
+  - `src/viz2d.mjs`: new SlicePanel mode **`'flux'`** ("Heat flow |q|") — recovers
+    `cellFlux` of the instantaneous T(t) on the **solve-free scrub path**, paints
+    per-cell |q| with the heat ramp, fixed colour scale = **99th-pct of the steady
+    |q|** (robust to the re-entrant-corner singularity; stable across scrub so the
+    field breathes — bright in winter, quiet in summer). Vector glyphs +
+    "Flow arrows" toggle (`ui.mjs`, `index.html`). 3D plane keeps T(t).
+  - **`tools/proof.mjs`** — the reusable Stage-2 proof harness: `buildCaptureSnippet`
+    (drives `window.__phasor`, reads the 2D `<canvas>` pixels), node-side pixel
+    `assert*` (`assertConcentration`/`assertBrighter`/`assertGlyphLayer`),
+    `writeProofSheet`. Sheet for this milestone in **`proofs/s2-m1.2/`**.
+  - `node --test`: **108/108**. `MIN_TESTS` 103→108.
+- **Driving the harness from here:** the agent runs the snippet via `preview_eval`.
+  Big results (the PNG dataURL) exceed the inline limit and get **saved to a
+  tool-results file** — capture numbers in one small eval, then dump
+  `canvas.toDataURL()+'!!!PAD!!!'+'A'.repeat(120000)` (forces the file save) and
+  decode the PNG in node (slice `data:image/png;base64,…` up to `!!!PAD!!!`).
+- **`window.__phasor`** = `{ viz, slices, probe, loadPreset, solve, ui }`; settle a
+  solve by polling `slices.mean != null && /^solved/.test(#status)`.
 
-## Your job this session: S2-M1.2 — heat-flow visualization (the early-priority crowd-pleaser)
-The flux field exists and is gated; now make it visible. Two steps, in order:
+## ⚠ Open item to resolve at the start of the session
+**The G2.5 wall-clock gate (48³ COCG < 10 s) is flaking at the boundary** on this
+machine (9.96 / 10.02 / 10.25 s — VALIDATION env note). It is **not** a regression
+(the solver is untouched by M1.2). `node --test` is 108/108 on a light run, but
+`node tools/guardrails.mjs` (the pre-commit hook) intermittently fails on it. Per
+CLAUDE.md the 10 s budget is a tolerance — **do not change/skip it without Operator
+sign-off this session.** S2-M2 (performance) is the real fix (preconditioner +
+matvec; Tier-0 baseline in BACKLOG). If the M1.2 commit hasn't landed yet, that's
+why — get the Operator's call (clean retry vs. one-time hook bypass).
 
-1. **`tools/proof.mjs` FIRST** (the reusable verification harness — biggest
-   leverage, gates this viz and every later one). It should: boot the dev server
-   (`tools/devserver.mjs` on :8123; `preview_start phasor`), drive the app to fixed
-   states, capture the **2D panel** via `canvas.toBlob` + `preview_eval`, scrape
-   the on-screen readouts to JSON, run pixel assertions, and write
-   `proofs/s2-mX/` (PNGs + a one-page `index.html`) for the Operator to sign.
-   Why the 2D panel: it's plain `<canvas>` so the agent can read its pixels;
-   `viz3d.mjs` is WebGL and CANNOT be screenshotted here (lean on Operator's eyes).
-2. **Heat-flow rendering in `viz2d.mjs`**: (a) dynamic **|q| magnitude colormap**
-   driven by the existing solve-free scrub path (`scrub.mjs`, never re-solves —
-   DESIGN §3.5); (b) a **vector-glyph / streamline** layer toggle. Put the glyph
-   LAYOUT generator in `flux.mjs` (pure → unit-tested), render in viz2d.
-
-### Gates to write FIRST (S2-M1.2)
-- **G1.2a (auto):** colormap value→RGB unit-tested (extend `colormap.mjs`).
-- **G1.2b (auto):** glyph generator — direction == normalized −∇T, length ∝
-  clamped |q|, count == sampling stride — tested against the flux array.
-- **G1.2c (agent-visual, via `proof.mjs`):** `toBlob` pixel assertions — the
-  high-|q| band at the thermal bridge is brighter than the field interior; the
-  glyph layer is non-empty over the envelope. (No human.)
-- **S2-H1.2 (human, batched):** Operator glances at the proof sheet — "looks like
-  heat flowing around the corner" + the 3D-WebGL view. (ROADMAP touchpoint 2.)
+## Your job this session: S2-M1.3 — harmonic-only view (DC-subtracted single frequency)
+Render a single ω's amplitude/phase with the **steady field removed** — "the
+basement goes flat" as a number, which catches DC leaking into the AC drive.
+- **Gate FIRST — S2-G1.3 (auto):** a preset with zero interior harmonic amplitude →
+  interior `|T̂|` < ε·peak. (Amplitude/phase modes already exist in `viz2d`; this
+  milestone is about the DC-subtracted *single-frequency* presentation + the gate.)
+- Then the view. Reuse the existing amplitude/phase plumbing; the new part is the
+  explicit DC subtraction and the labeled single-frequency mode.
+- **Proof:** run `tools/proof.mjs` for the visual (extend the capture states),
+  write `proofs/s2-m1.3/`. Batch the human glance with S2-H1.2.
 
 ## Standing rules (don't relearn the hard way)
 - **Gates before features; tolerances are law.** Write the gate first. **Run
   `node tools/guardrails.mjs` before claiming green and before every commit** — it
-  is the pre-commit hook now. Never set `GUARDRAILS_ALLOW_TOL_CHANGE` without the
-  Operator's sign-off this session. Raise `MIN_TESTS` when you add gates.
+  is the pre-commit hook. Never set `GUARDRAILS_ALLOW_TOL_CHANGE` without Operator
+  sign-off this session. Raise `MIN_TESTS` when you add gates.
 - **One subgoal per session**, `node --test` green + committed between.
-- **2D = agent-verifiable (toBlob pixels); 3D WebGL = human channel.** Don't try to
-  screenshot WebGL here.
-- **Performance (S2-M2) is still open**, deliberately deferred behind M1 (it's the
-  prereq for M3, not M1). Tier-0 baseline is captured in BACKLOG/VALIDATION: fine
-  `basement3d` (maxH 0.5, 31.7 k nodes) ~19–21 s, two steady solves dominate at 287
-  CG iters — preconditioner-first (multigrid V-cycle; Jacobi-CG stays the certified
-  fallback). Don't chain it into M1. Measure isolated via `tools/perf.mjs`.
+- **2D = agent-verifiable (canvas pixels via proof.mjs); 3D WebGL = human channel.**
 - **Scope watch:** one gentle flag for out-of-scope / sloped / later-milestone work
-  (custom geometry stays **box-based** — DESIGN §1 forbids CAD/STL/unstructured),
-  then respect the choice; park ideas in BACKLOG.md.
-- **Windows:** node on PATH; `git push origin main` blocked for the agent —
-  Operator pushes/tags. Copyrighted norm PDFs (`norms/`) and the Trittschall
-  explainer app are gitignored — keep them out of git (IP bright line).
+  (custom geometry stays box-based — DESIGN §1), then respect the choice; park in
+  BACKLOG.md.
+- **Windows:** node on PATH (no `python`; use node for base64/decoding);
+  `git push origin main` blocked for the agent — Operator pushes/tags.
 
-## Open question to resolve before S2-M1.5
+## Open question still pending (resolve before S2-M1.5)
 Where do the 13370/12831 closed-form formulas live? Leaning **(a)** a pure
-`src/standards.mjs` inside PHASOR (keeps the "reproduce the 13370 annex" calibration
-gate inside `node --test`); (b) only in the Explainer app via the JSON seam.
-Confirm with the Operator before building the comparison panel.
+`src/standards.mjs` inside PHASOR (keeps the 13370-annex calibration gate inside
+`node --test`); (b) only in the Explainer app via the JSON seam. Confirm with the
+Operator before building the comparison panel.

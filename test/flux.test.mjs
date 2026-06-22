@@ -13,7 +13,7 @@ import { MATERIALS, wall1d, corner2d } from '../src/model.mjs';
 import { cellIndex, nodeIndex } from '../src/grid.mjs';
 import { boundaryFlux } from '../src/fem.mjs';
 import { solveSteady } from '../src/worker.mjs';
-import { cellFlux, cellFluxComplex, regionFlux } from '../src/flux.mjs';
+import { cellFlux, cellFluxComplex, regionFlux, fluxGlyphs } from '../src/flux.mjs';
 
 const SOLVE = { tol: 1e-12, maxIter: 20000 };
 
@@ -95,6 +95,67 @@ test('G1.1d — regionFlux equals boundaryFlux per Robin region on wall1d (indep
     assert.ok(rel < 1e-7,
       `region ${region}: gradient flux ${fromGradient} vs BC flux ${fromBC} (rel ${rel})`);
   }
+});
+
+// ------------------------------------------------------------------ G1.2b
+test('G1.2b — fluxGlyphs: count == stride sampling, direction == −∇T, length ∝ clamped |q|', () => {
+  // synthetic 4×4×1 cell grid; cell centres at 0.5,1.5,2.5,3.5
+  const nx = 4;
+  const ny = 4;
+  const nz = 1;
+  const xs = Float64Array.from([0, 1, 2, 3, 4]);
+  const ys = Float64Array.from([0, 1, 2, 3, 4]);
+  const grid = { nx, ny, nz, xs, ys };
+  const nCells = nx * ny * nz;
+  const qx = new Float64Array(nCells);
+  const qy = new Float64Array(nCells);
+  const qz = new Float64Array(nCells);
+  // every cell non-void: qx = c+1 (so cell 3 = the in-plane max), qy = −(c+1)
+  for (let c = 0; c < nCells; c++) { qx[c] = c + 1; qy[c] = -(c + 1); }
+  const q = { qx, qy, qz, nx, ny, nz };
+
+  // stride 2 → sample i∈{0,2}, j∈{0,2} → 4 cells, all non-void → 4 glyphs
+  const { glyphs, scale } = fluxGlyphs(q, grid, 0, { stride: 2 });
+  assert.equal(glyphs.length, 4, 'count must equal the stride sampling of solid cells');
+
+  // auto scale == max in-plane |q| over the SAMPLED cells (not the whole grid):
+  // sampled cells are (i,j)∈{0,2}². biggest c among them is i=2,j=2 → c=10 → mag √2·11
+  const cMax = 2 + nx * 2; // cellIndex(2,2,0)
+  const expScale = Math.hypot(qx[cMax], qy[cMax]);
+  assert.ok(Math.abs(scale - expScale) < 1e-12, `scale ${scale} vs ${expScale}`);
+
+  for (const gph of glyphs) {
+    // cell-centre position lands on a half-integer (xs/ys spacing 1)
+    assert.ok(Number.isInteger(gph.x - 0.5) && Number.isInteger(gph.y - 0.5), 'centre coords');
+    // direction is the normalized in-plane (qx,qy) = −∇T direction
+    const mag = Math.hypot(gph.ux, gph.uy);
+    assert.ok(Math.abs(mag - 1) < 1e-12, 'direction must be unit length');
+    assert.ok(Math.abs(gph.ux - 1 / Math.SQRT2) < 1e-12, 'ux'); // qx>0, qy=−qx
+    assert.ok(Math.abs(gph.uy + 1 / Math.SQRT2) < 1e-12, 'uy');
+    // length is clamped |q|/scale ∈ [0,1]
+    assert.ok(gph.len > 0 && gph.len <= 1 + 1e-12, `len in (0,1]: ${gph.len}`);
+    assert.ok(Math.abs(gph.len - Math.min(1, gph.mag / scale)) < 1e-12, 'len ∝ clamped |q|/scale');
+  }
+  // the max-magnitude sampled glyph saturates to len == 1
+  assert.ok(glyphs.some((g) => Math.abs(g.len - 1) < 1e-12), 'max glyph saturates');
+});
+
+test('G1.2b — fluxGlyphs: void / zero-flux cells produce no glyph; explicit scale clamps', () => {
+  const nx = 2;
+  const ny = 2;
+  const nz = 1;
+  const grid = { nx, ny, nz, xs: Float64Array.from([0, 1, 2]), ys: Float64Array.from([0, 1, 2]) };
+  const qx = Float64Array.from([0, 4, 0, 2]); // cell 0 and cell 2 are zero (void)
+  const qy = Float64Array.from([0, 0, 0, 0]);
+  const q = { qx, qy, qz: new Float64Array(4), nx, ny, nz };
+
+  // stride 1 → 4 candidate cells, but two are zero → 2 glyphs
+  const { glyphs } = fluxGlyphs(q, grid, 0, { stride: 1, scale: 2 });
+  assert.equal(glyphs.length, 2, 'zero-flux (void) cells must be skipped');
+  // explicit scale 2: cell 1 mag 4 → clamped to len 1; cell 3 mag 2 → len 1 as well
+  for (const g of glyphs) assert.ok(g.len <= 1 + 1e-12, 'explicit scale clamps len to 1');
+  const byMag = glyphs.slice().sort((a, b) => b.mag - a.mag);
+  assert.ok(Math.abs(byMag[0].mag - 4) < 1e-12 && Math.abs(byMag[0].len - 1) < 1e-12, 'over-scale clamps');
 });
 
 // ------------------------------------------------------------------ G1.1e

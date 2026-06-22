@@ -47,3 +47,29 @@ export function sequential(t) {
     Math.round(a[2] + (b[2] - a[2]) * f),
   ];
 }
+
+// heat ramp for the |q| heat-flow magnitude map (S2-M1.2). Dark slate (low flux)
+// → deep amber → the accent amber (#e8a33d) → pale warm (high flux). Built so
+// luminance rises monotonically with the value, so "brighter ≡ more heat flow"
+// reads correctly and the proof-sheet brightness assertions hold. Kept distinct
+// from `sequential` so heat-flow never reads like an amplitude/phase map.
+const FLUX_STOPS = [
+  [20, 24, 33],
+  [120, 60, 30],
+  [232, 163, 61],
+  [245, 232, 200],
+];
+
+export function flux(t) {
+  const s = t <= 0 ? 0 : t >= 1 ? 1 : t;
+  const x = s * (FLUX_STOPS.length - 1);
+  const seg = Math.min(FLUX_STOPS.length - 2, Math.floor(x));
+  const f = x - seg;
+  const a = FLUX_STOPS[seg];
+  const b = FLUX_STOPS[seg + 1];
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * f),
+    Math.round(a[1] + (b[1] - a[1]) * f),
+    Math.round(a[2] + (b[2] - a[2]) * f),
+  ];
+}

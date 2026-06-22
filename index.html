@@ -378,7 +378,9 @@ const ui = buildUI(Object.keys(presets), {
   onField: (mode) => slices.setMode(mode),
   onFreq: (f) => { slices.setFreq(OMEGA[f]); probe.setFreq(OMEGA[f]); },
   onFreqToggle: (f, on) => slices.setEnabled(f, on),
+  onGlyphs: (on) => slices.setGlyphs(on),
 });
+slices.setGlyphs(ui.arrows);
 
 loadPreset(ui.preset, { layers: layersWithInsulation(ui.insulation) });
 slices.setSlice(ui.sliceZ);

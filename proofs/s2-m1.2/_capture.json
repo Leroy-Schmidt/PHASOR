@@ -1,0 +1,10 @@
+{
+  "W": 340,
+  "H": 170,
+  "fluxRange": [0, 5.262868881876067],
+  "field": { "maxLum": 232.2, "meanLum": 107.2, "nSolid": 14500 },
+  "corner": { "rect": [0.375, 0.75, 0.125, 0.125], "lum": 140.9 },
+  "interior": { "rect": [0.25, 0.875, 0.125, 0.125], "lum": 80.7 },
+  "glyph": { "changedFrac": 0.2108, "changedPx": 3056 },
+  "readouts": "f_Rsi (R_si = 0.25 m²K/W) = 0.897 ✓ ≥ 0.70 · θ_si,min = 18.87 °C · ψ = -0.0646 W/(m·K) — external dimensions · U = 0.196 W/(m²K) · L₂D = 0.4888 W/(m·K) · Φ_exterior = 5.377 W (20 °C inside / 9 °C outside)"
+}

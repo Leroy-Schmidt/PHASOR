@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>PHASOR S2-M1.2 — heat-flow visualization (corner2d)</title>
+<style>
+  body{background:#0e1013;color:#cfd3d8;font:14px/1.5 system-ui,sans-serif;margin:0;padding:24px}
+  h1{font-size:18px;color:#e8a33d} .verdict{font-weight:700;padding:4px 10px;border-radius:4px}
+  .verdict.ok{background:#1d3a16;color:#9be07d} .verdict.bad{background:#3a1616;color:#e0533d}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:16px}
+  .card{background:#14161a;border-radius:8px;padding:12px} .card h2{font-size:14px;margin:0 0 8px}
+  .card img{width:100%;border-radius:4px;background:#000;image-rendering:pixelated}
+  .meta{font:11px ui-monospace,monospace;color:#8a919a;margin:8px 0;word-break:break-all}
+  .readouts{font-size:12px;color:#cfd3d8;margin:6px 0}
+  .checks{list-style:none;padding:0;margin:8px 0 0;font-size:12px}
+  .checks .ok{color:#9be07d} .checks .bad{color:#e0533d}
+</style>
+<h1>PHASOR S2-M1.2 — heat-flow visualization (corner2d) &nbsp; <span class="verdict ok">ALL PIXEL CHECKS PASS</span></h1>
+<p>2D-canvas proof sheet (the agent-verifiable channel). Glance + sign; then look at the live 3D view.</p>
+<div class="grid"><section class="card">
+      <h2>corner2d-heat-flow-steady</h2>
+      <img src="corner2d-heat-flow-steady.png" alt="corner2d-heat-flow-steady">
+      <div class="meta">{"preset":"corner2d","field":"Heat flow |q|","display":"steady field","arrows":true,"scaleMax":"5.26 W/m²"}</div>
+      <div class="readouts">f_Rsi (R_si = 0.25 m²K/W) = 0.897 ✓ ≥ 0.70 · θ_si,min = 18.87 °C · ψ = -0.0646 W/(m·K) — external dimensions · U = 0.196 W/(m²K) · L₂D = 0.4888 W/(m·K) · Φ_exterior = 5.377 W (20 °C inside / 9 °C outside)</div>
+      <ul class="checks"><li class="ok">✓ <b>concentration</b> — maxLum 232.2 − meanLum 107.2 = 125.0 (≥ 30) over 14500 solid px</li><li class="ok">✓ <b>brighter(corner>interior)</b> — corner lum 140.9 − interior lum 80.7 = 60.2 (≥ 15)</li><li class="ok">✓ <b>glyph-layer-nonempty</b> — arrows changed 21.08% of solid pixels (≥ 1.0%)</li></ul>
+    </section></div>

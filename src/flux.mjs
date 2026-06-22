@@ -120,3 +120,57 @@ export function regionFlux(problem, q, region) {
   }
   return sum;
 }
+
+/**
+ * Vector-glyph LAYOUT for the heat-flow viz (S2-M1.2). Pure and DOM-free so the
+ * arrow placement is unit-tested independently of the canvas that draws it.
+ *
+ * One glyph per solid cell sampled on a stride, at the XY slice layer `k`. The
+ * direction is the normalized in-plane flux (qx, qy) — i.e. the −∇T direction,
+ * since q = −λ∇T with λ > 0 — and the length is the clamped magnitude
+ * |q_xy| / scale ∈ [0, 1] (the renderer multiplies by a pixel length). Void /
+ * zero-flux cells (q = 0 there) yield no glyph.
+ *
+ * @param {{qx,qy: Float64Array, nx,ny,nz: number}} q — from `cellFlux`
+ * @param {{nx,ny,nz: number, xs,ys: ArrayLike<number>}} grid — for cell centres
+ * @param {number} k — slice cell layer
+ * @param {{stride?: number, scale?: number}} [opts] — sampling stride (≥1) and
+ *   the magnitude mapping to len = 1; if omitted, scale = max |q_xy| over the
+ *   sampled solid cells (so the strongest sampled arrow saturates to 1).
+ * @returns {{glyphs: Array<{x,y,ux,uy,mag,len: number}>, scale: number}}
+ *   x,y are cell-centre coordinates (metres).
+ */
+export function fluxGlyphs(q, grid, k, { stride = 1, scale } = {}) {
+  const { qx, qy, nx, ny } = q;
+  const { xs, ys } = grid;
+  const s = Math.max(1, Math.floor(stride));
+
+  // pass 1: collect sampled solid (non-zero-flux) cells + in-plane magnitudes
+  const picks = [];
+  let maxMag = 0;
+  for (let j = 0; j < ny; j += s) {
+    for (let i = 0; i < nx; i += s) {
+      const c = i + nx * (j + ny * k);
+      const mag = Math.hypot(qx[c], qy[c]);
+      if (mag === 0) continue; // void / zero flux → no arrow
+      picks.push({ i, j, c, mag });
+      if (mag > maxMag) maxMag = mag;
+    }
+  }
+
+  const sc = scale != null ? scale : maxMag;
+  const glyphs = [];
+  if (sc > 0) {
+    for (const { i, j, c, mag } of picks) {
+      glyphs.push({
+        x: (xs[i] + xs[i + 1]) / 2,
+        y: (ys[j] + ys[j + 1]) / 2,
+        ux: qx[c] / mag,
+        uy: qy[c] / mag,
+        mag,
+        len: Math.min(1, mag / sc),
+      });
+    }
+  }
+  return { glyphs, scale: sc };
+}

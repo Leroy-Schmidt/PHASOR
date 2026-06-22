@@ -12,6 +12,7 @@ export const FIELD_MODES = {
   'T(t) instantaneous': 'instant',
   'Amplitude |T̂|': 'amplitude',
   'Phase lag τ': 'phase',
+  'Heat flow |q|': 'flux',
 };
 
 // Presets whose geometry responds to the Insulation [m] slider (they consume the
@@ -27,7 +28,8 @@ const INSULATION_PRESETS = new Set(['wall1d', 'corner2d']);
  *          onSlice: (frac: number) => void,
  *          onField: (mode: 'instant'|'amplitude'|'phase') => void,
  *          onFreq: (f: 'annual'|'diurnal') => void,
- *          onFreqToggle: (f: 'annual'|'diurnal', on: boolean) => void}} handlers
+ *          onFreqToggle: (f: 'annual'|'diurnal', on: boolean) => void,
+ *          onGlyphs: (on: boolean) => void}} handlers
  */
 export function buildUI(presetNames, handlers) {
   const state = {
@@ -40,6 +42,7 @@ export function buildUI(presetNames, handlers) {
     freq: 'annual',
     incAnnual: true,
     incDiurnal: true,
+    arrows: true,
   };
   const gui = new GUI({ title: 'PHASOR' });
 
@@ -74,6 +77,10 @@ export function buildUI(presetNames, handlers) {
   gui.add(state, 'incDiurnal')
     .name('T(t): diurnal')
     .onChange((v) => handlers.onFreqToggle('diurnal', v));
+  // heat-flow vector glyphs (only bite the 'Heat flow |q|' field, harmless else)
+  gui.add(state, 'arrows')
+    .name('Flow arrows')
+    .onChange((v) => handlers.onGlyphs(v));
 
   // Hide controls that do nothing on the active preset (handoff polish): the
   // insulation slider only bites presets with an eps build-up; the slice-z

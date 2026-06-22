@@ -5,7 +5,13 @@
 // re-solve (DESIGN §3.5). Shows the material map until a field arrives.
 import { cellIndex, nodeIndex } from './grid.mjs';
 import { amplitude, timeLagRelative } from './physics.mjs';
-import { diverging, sequential } from './colormap.mjs';
+import { diverging, sequential, flux as fluxCm } from './colormap.mjs';
+import { cellFlux, cellFluxComplex, fluxGlyphs } from './flux.mjs';
+
+// Heat-flow glyphs: aim for ~this many arrows across the wider grid axis; the
+// sampling stride is derived from it so dense and coarse grids both read as a
+// legible vector field rather than a uniform texture of tiny marks.
+const GLYPH_TARGET = 14;
 
 // Phase-lag map: nodes whose amplitude is below this fraction of the peak amp
 // carry no meaningful phase (|T̂|→0 ⇒ arg is numerical noise). Mask them so the
@@ -54,6 +60,21 @@ export class SlicePanel {
     this.model = null; // { grid, painted, materials }
     this.T = null;     // nodal Float64Array currently displayed
     this.range = null; // [min, max] over solid-cell nodes
+    // Heat-flow (|q|) mode state (S2-M1.2). `cellField` is a per-cell scalar
+    // (|q_xy|) rendered cell-wise instead of the nodal path; `_cellLambda` lets
+    // us recover q = −λ∇T client-side from the model alone (no worker change);
+    // `_fluxRange` is the FIXED time-invariant |q| scale (envelope bound), so
+    // scrubbing breathes the arrows/colours without moving the colour scale.
+    this.cellField = null;
+    this._cellLambda = null;
+    this._fluxRange = null;
+    this._fluxQ = null;  // last recovered flux (for the glyph overlay)
+    this.glyphs = false; // flow-arrow overlay on/off
+    // 3D field plane mirrors a NODAL field; in |q| mode it shows the
+    // instantaneous T(t) (the 3D channel stays temperature) — kept here so the
+    // 2D panel can paint |q| while the 3D model keeps a meaningful field.
+    this._emitOverride = null;
+    this._xform = null; // last render transform, for the proof harness pixelOf
     // T(t) mode: a FIXED color range over the field's full temporal envelope
     // (T̄ ± Σ|T̂|), so a node keeps its colour as the scrubber sweeps — only the
     // pattern moves, not the scale. Recomputed on solve / freq-toggle, never on
@@ -99,9 +120,25 @@ export class SlicePanel {
 
   /** Notify the 3D field plane of the current displayed field / slice position. */
   _emitField() {
-    if (this.onFieldUpdate) {
-      this.onFieldUpdate({ T: this.T, range: this.range, cm: this._cm, frac: this.frac });
+    if (!this.onFieldUpdate) return;
+    // |q| mode paints a cell field the 3D plane can't take, so it overrides the
+    // emit with the nodal T(t); other modes mirror the display directly.
+    const e = this._emitOverride;
+    if (e) this.onFieldUpdate({ T: e.T, range: e.range, cm: e.cm, frac: this.frac });
+    else this.onFieldUpdate({ T: this.T, range: this.range, cm: this._cm, frac: this.frac });
+  }
+
+  /** Per-cell λ from the model (materials[id].lambda), void → 0. For client-side
+   *  flux recovery q = −λ∇T without a worker round-trip. */
+  _buildCellLambda() {
+    const { grid, painted, materials } = this.model;
+    const n = grid.nx * grid.ny * grid.nz;
+    const cl = new Float64Array(n);
+    for (let c = 0; c < n; c++) {
+      const m = materials[painted.matIds[painted.cells[c]]];
+      cl[c] = m ? (m.lambda || 0) : 0;
     }
+    this._cellLambda = cl;
   }
 
   setModel(model) {
@@ -109,9 +146,13 @@ export class SlicePanel {
     this.T = null;
     this.range = null;
     this._instantRange = null;
+    this.cellField = null;
+    this._fluxRange = null;
+    this._emitOverride = null;
     this.mean = null;
     this.harmonics = [];
     this._field = 'materials';
+    this._buildCellLambda();
     this.requestRender();
     this._emitField();
   }
@@ -158,6 +199,52 @@ export class SlicePanel {
   }
 
   /**
+   * Fixed |q| colour scale for the heat-flow mode — time-invariant so scrubbing
+   * brightens/dims the field without moving the scale (the D1 principle, applied
+   * to flux). The scale is the STEADY in-plane flux magnitude max over solid
+   * cells: the heat-flow story is the steady thermal bridge, and pinning to it
+   * lets that pattern fill the ramp while the harmonic breathing reads as
+   * brightening around it (peaks clamp to the hot end). For presets with no
+   * steady flux (e.g. a soil column at T_mean, |q̄|≈0) fall back to the harmonic
+   * oscillation-amplitude bound so the panel isn't black. Recompute only on
+   * solve / enabled-harmonic change.
+   */
+  _computeFluxRange() {
+    if (!this.mean || !this._cellLambda) { this._fluxRange = null; return; }
+    const probe = { grid: this.model.grid, cellLambda: this._cellLambda };
+    const qm = cellFlux(probe, this.mean);
+    const hs = this.harmonics.filter((h) => this.enabled.has(h.f))
+      .map((h) => cellFluxComplex(probe, h.re, h.im));
+    const steady = [];
+    const harm = [];
+    for (let c = 0; c < this._cellLambda.length; c++) {
+      if (this._cellLambda[c] === 0) continue;
+      steady.push(Math.hypot(qm.qx[c], qm.qy[c]));
+      let ex = 0;
+      let ey = 0;
+      for (const qh of hs) {
+        ex += Math.hypot(qh.qxRe[c], qh.qxIm[c]);
+        ey += Math.hypot(qh.qyRe[c], qh.qyIm[c]);
+      }
+      harm.push(Math.hypot(ex, ey));
+    }
+    // Robust 99th-percentile rather than the raw max: a re-entrant corner is a
+    // flux-concentration singularity whose single hottest cell is mesh-dependent
+    // and would compress the whole field into the dark end. Clipping it lets the
+    // bulk field fill the ramp; the bridge then saturates to the hot colour —
+    // which is exactly the "heat concentrates here" reading we want.
+    const pct = (arr, p) => {
+      if (!arr.length) return 0;
+      const s = arr.slice().sort((a, b) => a - b);
+      return s[Math.min(s.length - 1, Math.floor(p * (s.length - 1)))];
+    };
+    const steadyP = pct(steady, 0.99);
+    const harmP = pct(harm, 0.99);
+    const max = steadyP > 1e-6 * harmP ? steadyP : harmP;
+    this._fluxRange = [0, max > 0 ? max : 1];
+  }
+
+  /**
    * M1 / steady path: display a plain nodal temperature field directly.
    * @param {Float64Array} T nodal field for the CURRENT model's grid
    */
@@ -172,6 +259,9 @@ export class SlicePanel {
     this.T = T;
     this.range = this.rangeOverSolid(T);
     this._instantRange = this.range; // no harmonics → envelope is just the field
+    this.cellField = null;
+    this._emitOverride = null;
+    this._computeFluxRange();
     this.note.textContent = '';
     this.requestRender();
     this._emitField();
@@ -189,15 +279,20 @@ export class SlicePanel {
     }
     this.note.textContent = '';
     this._computeInstantRange();
+    this._computeFluxRange();
     this._recompute();
   }
 
   setMode(mode) { this.mode = mode; this._recompute(); }
 
+  /** Toggle the heat-flow vector-glyph overlay (|q| mode only). */
+  setGlyphs(on) { this.glyphs = !!on; this.requestRender(); }
+
   /** Toggle whether a frequency (by id, e.g. 'annual') is summed into T(t). */
   setEnabled(freq, on) {
     if (on) this.enabled.add(freq); else this.enabled.delete(freq);
     this._computeInstantRange(); // the envelope depends on which harmonics sum in
+    this._computeFluxRange();    // …and so does the |q| scale
     this._recompute();
   }
 
@@ -205,26 +300,68 @@ export class SlicePanel {
 
   setTime(t) { this.time = t; this._recompute(); }
 
+  /** Instantaneous nodal field T(t) = T̄ + Σ_k [Re(T̂_k)cos(ω_k t) −
+   *  Im(T̂_k)sin(ω_k t)] (DESIGN §2.5), summing only the enabled harmonics.
+   *  Shared by the T(t) display and the heat-flow (|q|) recovery. */
+  _instantField() {
+    const n = this.mean.length;
+    const vals = new Float64Array(n);
+    const cs = this.harmonics
+      .filter((h) => this.enabled.has(h.f))
+      .map((h) => ({
+        re: h.re, im: h.im, c: Math.cos(h.omega * this.time), s: Math.sin(h.omega * this.time),
+      }));
+    for (let i = 0; i < n; i++) {
+      let v = this.mean[i];
+      for (const h of cs) v += h.re[i] * h.c - h.im[i] * h.s;
+      vals[i] = v;
+    }
+    return vals;
+  }
+
   /** Derive the displayed field (values, unit, colormap, header) from state. */
   _recompute() {
     if (!this.mean) {
-      this.T = null; this.range = null; this.requestRender(); this._emitField(); return;
+      this.T = null; this.range = null; this.cellField = null;
+      this._emitOverride = null; this.requestRender(); this._emitField(); return;
     }
+
+    // Heat-flow |q| mode (S2-M1.2): recover q = −λ∇T(t) at cell centres from the
+    // instantaneous field — purely on the scrub path, never a re-solve. The 2D
+    // panel paints the per-cell magnitude with the heat ramp; the 3D plane keeps
+    // the nodal T(t) (emit override). Stable colour scale = the fixed envelope.
+    if (this.mode === 'flux') {
+      const vals = this._instantField();
+      const q = cellFlux({ grid: this.model.grid, cellLambda: this._cellLambda }, vals);
+      const mag = new Float64Array(q.qx.length);
+      for (let c = 0; c < mag.length; c++) {
+        mag[c] = this._cellLambda[c] === 0 ? NaN : Math.hypot(q.qx[c], q.qy[c]);
+      }
+      this.cellField = mag;
+      this._fluxQ = q;
+      this.T = vals; // retained for the 3D emit override
+      if (!this._fluxRange) this._computeFluxRange();
+      this.range = this._fluxRange;
+      this._cm = fluxCm;
+      this.unit = 'W/m²';
+      this._field = 'Heat flow |q| [W/m²]';
+      this._emitOverride = {
+        T: vals, cm: diverging,
+        range: this._instantRange ?? this.rangeOverSolid(vals),
+      };
+      this.requestRender();
+      this._emitField();
+      return;
+    }
+
+    // nodal modes (T(t), amplitude, phase) — no cell field, no emit override
+    this.cellField = null;
+    this._emitOverride = null;
     const n = this.mean.length;
     const vals = new Float64Array(n);
     if (this.mode === 'instant') {
-      // T(t) = T̄ + Σ_k [Re(T̂_k)cos(ω_k t) − Im(T̂_k)sin(ω_k t)] (DESIGN §2.5).
-      // cos/sin are node-independent — hoist them out of the node loop.
-      const cs = this.harmonics
-        .filter((h) => this.enabled.has(h.f))
-        .map((h) => ({
-          re: h.re, im: h.im, c: Math.cos(h.omega * this.time), s: Math.sin(h.omega * this.time),
-        }));
-      for (let i = 0; i < n; i++) {
-        let v = this.mean[i];
-        for (const h of cs) v += h.re[i] * h.c - h.im[i] * h.s;
-        vals[i] = v;
-      }
+      const inst = this._instantField();
+      vals.set(inst);
       this.unit = '°C';
       this._cm = diverging;
       this._field = 'T(t) [°C]';
@@ -274,6 +411,10 @@ export class SlicePanel {
     this.T = null;
     this.range = null;
     this._instantRange = null;
+    this.cellField = null;
+    this._fluxRange = null;
+    this._fluxQ = null;
+    this._emitOverride = null;
     this.mean = null;
     this.harmonics = [];
     this._field = 'materials';
@@ -312,6 +453,8 @@ export class SlicePanel {
     const oy = (H - scale * spanY) / 2;
     const pxOf = (x) => ox + (x - xmin) * scale;
     const pyOf = (y) => H - oy - (y - ymin) * scale;
+    // publish the transform so the proof harness can map physical → device px
+    this._xform = { scale, ox, oy, xmin, ymin, H };
 
     // slice planes: nearest node plane for the field, adjacent cell layer for materials
     const zCoord = zs[0] + this.frac * (zs[nz] - zs[0]);
@@ -360,7 +503,10 @@ export class SlicePanel {
         let g;
         let b;
         let v;
-        if (this.T) {
+        if (this.cellField) {
+          // heat-flow |q|: a per-cell scalar, painted cell-wise (no interpolation)
+          v = this.cellField[cellIndex(grid, i, j, kCell)];
+        } else if (this.T) {
           const x = xmin + (q + 0.5 - ox) / scale;
           const tx = (x - xs[i]) / (xs[i + 1] - xs[i]);
           const v00 = this.T[nodeIndex(grid, i, j, kNode)];
@@ -369,7 +515,7 @@ export class SlicePanel {
           const v11 = this.T[nodeIndex(grid, i + 1, j + 1, kNode)];
           v = (1 - ty) * ((1 - tx) * v00 + tx * v10) + ty * ((1 - tx) * v01 + tx * v11);
         }
-        if (this.T && Number.isFinite(v)) {
+        if ((this.cellField || this.T) && Number.isFinite(v)) {
           [r, g, b] = this._cm((v - lo) * inv);
         } else {
           // no field, or a masked (phase-undefined) node: show the material color
@@ -387,8 +533,74 @@ export class SlicePanel {
     }
     ctx.putImageData(img, 0, 0);
 
-    if (this.T) this.drawIsolines(ctx, kNode, kCell, pxOf, pyOf);
+    // nodal modes get isolines; heat-flow mode gets direction glyphs instead
+    if (this.cellField) {
+      if (this.glyphs) this.drawGlyphs(ctx, kCell, pxOf, pyOf, scale);
+    } else if (this.T) {
+      this.drawIsolines(ctx, kNode, kCell, pxOf, pyOf);
+    }
     this.drawColorbar();
+  }
+
+  /** Map a physical (x, y) on the slice plane to device-pixel canvas coords.
+   *  Used by the proof harness (slices.pixelOf) to place sample boxes. */
+  pixelOf(x, y) {
+    const t = this._xform;
+    if (!t) return { x: 0, y: 0 };
+    return {
+      x: Math.round(t.ox + (x - t.xmin) * t.scale),
+      y: Math.round(t.H - t.oy - (y - t.ymin) * t.scale),
+    };
+  }
+
+  /** Heat-flow vector glyphs: arrows along the in-plane flux direction (−∇T),
+   *  length ∝ clamped |q|, scaled by the fixed |q| envelope so they breathe with
+   *  the scrubber without rescaling. Drawn with a dark halo + light core so they
+   *  read on both the dark (low-|q|) and pale (high-|q|) ends of the ramp. */
+  drawGlyphs(ctx, kCell, pxOf, pyOf, scale) {
+    if (!this._fluxQ) return;
+    const { grid } = this.model;
+    const stride = Math.max(1, Math.round(Math.max(grid.nx, grid.ny) / GLYPH_TARGET));
+    const sc = this.range ? this.range[1] : undefined; // envelope max → temporal stability
+    const { glyphs } = fluxGlyphs(this._fluxQ, grid, kCell, { stride, scale: sc });
+    if (!glyphs.length) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const meanCell = Math.min((grid.xs[grid.nx] - grid.xs[0]) / grid.nx,
+      (grid.ys[grid.ny] - grid.ys[0]) / grid.ny);
+    const boxPx = stride * scale * meanCell; // spacing between glyph centres, px
+    const maxLen = Math.max(8 * dpr, 0.45 * boxPx); // longest arrow in px
+
+    const drawPass = (style, width) => {
+      ctx.strokeStyle = style;
+      ctx.lineWidth = width;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (const gph of glyphs) {
+        const cx = pxOf(gph.x);
+        const cy = pyOf(gph.y);
+        const L = gph.len * maxLen;
+        if (L < 1) continue;
+        const dx = gph.ux * L;
+        const dy = -gph.uy * L; // screen y is flipped relative to physical y
+        const hx = cx + dx / 2;
+        const hy = cy + dy / 2;
+        const tx = cx - dx / 2;
+        const ty = cy - dy / 2;
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(hx, hy);
+        // arrowhead: two short barbs at ±150° from the shaft direction
+        const a = Math.atan2(dy, dx);
+        const hl = Math.min(6 * dpr, 0.4 * L);
+        ctx.moveTo(hx, hy);
+        ctx.lineTo(hx - hl * Math.cos(a - 0.5), hy - hl * Math.sin(a - 0.5));
+        ctx.moveTo(hx, hy);
+        ctx.lineTo(hx - hl * Math.cos(a + 0.5), hy - hl * Math.sin(a + 0.5));
+      }
+      ctx.stroke();
+    };
+    drawPass('rgba(14, 16, 19, 0.85)', 3 * dpr); // dark halo
+    drawPass('rgba(244, 246, 250, 0.95)', 1.4 * dpr); // light core
   }
 
   drawIsolines(ctx, kNode, kCell, pxOf, pyOf) {

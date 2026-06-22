@@ -98,6 +98,7 @@ import { MATERIALS, presets, layersWithInsulation } from './src/model.mjs';
 import { Viz3D } from './src/viz3d.mjs';
 import { SlicePanel } from './src/viz2d.mjs';
 import { LineProbe } from './src/lineprobe.mjs';
+import { LossView } from './src/lossview.mjs';
 import { buildUI, FIELD_MODES } from './src/ui.mjs';
 import { OMEGA_ANNUAL, OMEGA_DIURNAL } from './src/physics.mjs';
 import { advanceFraction } from './src/scrub.mjs';
@@ -156,10 +157,13 @@ const stamp = () => current?.name ?? 'phasor';
 
 const mapSec = makeSection('Field map (slice)', true);
 const probeSec = makeSection('Line probe (profile)', true);
+const lossSec = makeSection('Annual heat loss', false);
 const slices = new SlicePanel(mapSec.body);
 const probe = new LineProbe(probeSec.body);
+const loss = new LossView(lossSec.body);
 mapSec.details.addEventListener('toggle', () => slices.requestRender());
 probeSec.details.addEventListener('toggle', () => probe.requestRender());
+lossSec.details.addEventListener('toggle', () => loss.requestRender());
 
 // M4 headline: paint the panel's field onto the 3D model. The panel is the
 // single source of the displayed field; every change (mode, freq, scrub tick)
@@ -175,6 +179,8 @@ addExportBtn(mapSec.actions, '⤓ PNG', 'Download the slice map as PNG',
   () => exportCanvasPNG(slices.canvas, `${stamp()}-slice.png`));
 addExportBtn(probeSec.actions, '⤓ PNG', 'Download the line profile as PNG',
   () => exportCanvasPNG(probe.canvas, `${stamp()}-profile.png`));
+addExportBtn(lossSec.actions, '⤓ PNG', 'Download the heat-loss curve as PNG',
+  () => exportCanvasPNG(loss.canvas, `${stamp()}-heatloss.png`));
 addExportBtn(probeSec.actions, '⤓ CSV', 'Download the line-probe data as CSV', () => {
   const csv = probe.toCSV();
   if (csv) exportText(csv, `${stamp()}-lineprobe.csv`);
@@ -206,6 +212,7 @@ function applyScrub() {
   const period = day ? 86400 : 31557600;
   slices.setTime(frac * period);
   probe.setTime(frac * period);
+  loss.setTime(frac * period);
   if (day) {
     const h = frac * 24;
     const hh = Math.floor(h);
@@ -301,6 +308,7 @@ function invalidate(message) {
   seq++; // any in-flight result is now stale
   slices.clearField(message);
   probe.clear();
+  loss.clear();
   readouts.innerHTML = '';
 }
 
@@ -324,6 +332,7 @@ worker.onmessage = (e) => {
     slices.setFreq(OMEGA[ui.freq]);
     probe.setSolution({ mean, harmonics });
     probe.setFreq(OMEGA[ui.freq]);
+    loss.setLoss(m.loss);
     applyScrub();
     renderReadouts(m.readouts);
     const hi = m.harmonics.map((h) => `${h.f} ${h.iterations} it`).join(', ');
@@ -385,7 +394,7 @@ slices.setGlyphs(ui.arrows);
 loadPreset(ui.preset, { layers: layersWithInsulation(ui.insulation) });
 slices.setSlice(ui.sliceZ);
 solve();
-window.__phasor = { viz, slices, probe, loadPreset, solve, ui }; // debug handle (console / tests)
+window.__phasor = { viz, slices, probe, loss, loadPreset, solve, ui }; // debug handle (console / tests)
 </script>
 </body>
 </html>

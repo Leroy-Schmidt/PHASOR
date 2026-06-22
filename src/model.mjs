@@ -269,6 +269,56 @@ export function basement({
 }
 
 /**
+ * `basement_air` — the SAME cellar wall + floor as `basement`, but standing in
+ * outdoor air instead of buried in soil (ROADMAP S2-M1.4). The soil block is
+ * gone; the structure's outer faces (floor bottom/side, wall outer/top) face the
+ * external climate directly through the air film (R_se = 0.04, CLIMATE.external).
+ * The room inner surfaces (floor top + wall inner face) carry the interior Robin,
+ * exactly as in `basement`, so the loss-region area matches and the comparison is
+ * fair. x = 0 stays the room-center symmetry plane (adiabatic).
+ *
+ * The domain is bounded to the structure's bounding box, so the outer faces land
+ * on the grid boundary and `'rest'` (after the x=0 symmetry plane) selects them
+ * for the exterior-air Robin; the only interior (solid↔void) faces are the room,
+ * which `facesInside` picks — same selector trick as `basement`, no new machinery.
+ *
+ * Pedagogy: the buried cellar loses less and lags more than this one — the soil
+ * is insulation + thermal mass. The earth÷air reduction factor (S2-M1.5) is the
+ * payoff, computed not looked up.
+ */
+export function basement_air({
+  roomHalfWidth = 2.0, wallThickness = 0.3, roomHeight = 2.5,
+  slabThickness = 0.2, thin = 0.2, maxH = 0.25,
+} = {}) {
+  const xWallOuter = roomHalfWidth + wallThickness;
+  const yFloorTop = slabThickness;
+  const H = yFloorTop + roomHeight; // top of the wall/room
+
+  return {
+    name: 'basement_air',
+    boxes: [
+      { name: 'floor', x: [0, xWallOuter], y: [0, slabThickness], z: [0, thin], material: 'concrete' },
+      { name: 'wall', x: [roomHalfWidth, xWallOuter], y: [yFloorTop, H], z: [0, thin], material: 'concrete' },
+      { name: 'room', x: [0, roomHalfWidth], y: [yFloorTop, H], z: [0, thin], material: 'air' },
+    ],
+    background: 'air',
+    bcs: [
+      { name: 'interior', select: { facesInside: true }, type: 'robin', ...CLIMATE.internal },
+      // x=0 room-center symmetry plane — adiabatic (matched before 'rest')
+      { name: 'sym', select: { axis: 'x', side: 'min' }, type: 'adiabatic' },
+      // every other outer face = the structure exposed to outdoor air
+      { name: 'exterior', select: 'rest', type: 'robin', ...CLIMATE.external },
+    ],
+    gridSpec: {
+      x: { mandatory: [0, roomHalfWidth, xWallOuter], maxH },
+      y: { mandatory: [0, yFloorTop, H], maxH },
+      z: { mandatory: [0, thin], maxH: 0.1, minCells: 2 },
+    },
+    extent: { x: [0, xWallOuter], y: [0, H], z: [0, thin] },
+  };
+}
+
+/**
  * `basement3d` — the genuinely VOLUMETRIC cellar (M5 showcase). The 2D
  * `basement` above is a thin z-extruded cross-section (the fast path for the
  * annual-cycle / f_Rsi physics); this is a real room with a finite footprint
@@ -342,4 +392,6 @@ export function basement3d({
   };
 }
 
-export const presets = { wall1d, corner2d, slab_junction, basement, basement3d, soil_rod };
+export const presets = {
+  wall1d, corner2d, slab_junction, basement, basement_air, basement3d, soil_rod,
+};

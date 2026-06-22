@@ -1,0 +1,9 @@
+{
+  "W": 340,
+  "H": 170,
+  "earth": { "meanW": 9.98, "min": 4.02, "max": 15.92, "period_d": 365.3 },
+  "air": { "meanW": 40.85, "min": 0.27, "max": 93.25, "period_d": 365.3 },
+  "factor": 0.244,
+  "pixels": { "drawn": 5286, "amberEarth": 383, "redAir": 1909 },
+  "readouts": "Annual heat loss, basement (corner-of-cellar cross-section). Earth (buried): mean 9.98 W, swings 4.0-15.9 W, damped + lagged by the soil. Air (same cellar exposed): mean 40.85 W, swings 0.3-93.3 W, tracks the outdoor wave directly. Reduction earth/air = 0.24 -> soil cuts the annual-mean loss to 24%. Curves cross in summer (the ~2-month soil lag). By superposition, never a re-solve."
+}

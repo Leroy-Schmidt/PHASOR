@@ -1,77 +1,86 @@
-# PHASOR — session kickoff: S2-M1.4 annual heat-loss curve (earth vs. air)
+# PHASOR — session kickoff: S2-M1.5 comparison + "validate the standard"
 
-Read `ROADMAP.md` (the Stage-2 plan — priority layer above BACKLOG), CLAUDE.md,
+Read `ROADMAP.md` (Stage-2 plan, priority layer above BACKLOG), CLAUDE.md,
 VALIDATION.md (tail), and `git log --oneline -8`. **Stage 1 (M0–M5) is sealed.**
-Stage 2 is the teaching + validation build (ROADMAP), one hard constraint:
-maximize the odds of a working app while keeping Operator involvement low — so
-almost everything is gated headlessly and the Operator only signs pre-built proofs.
+Stage 2 keeps Operator involvement low: gate headlessly, sign pre-built proofs.
 
-## State you're inheriting (S2-M1.3 done, 2026-06-22)
-- **S2-M1.2 — heat-flow viz DONE** (committed `a7bdac4`): `flux` heat ramp +
-  `fluxGlyphs` (gates G1.2a/b), SlicePanel `'flux'` mode (|q| on the solve-free
-  scrub path, 99th-pct-of-steady scale, glyph overlay), and **`tools/proof.mjs`**
-  (the reusable Stage-2 proof harness). Sheet: `proofs/s2-m1.2/`.
-- **S2-M1.3 — harmonic-only view DONE** (this session): SlicePanel `'swing'` mode
-  ("Harmonic swing Δθ(t)") — single-frequency AC deviation Δθ(t)=Re[T̂_ω e^{iωt}],
-  steady field removed, diverging map, fixed symmetric ±|T̂|max, breathes with the
-  scrubber. Gate **S2-G1.3** (`test/harmonic-only.test.mjs`): the diurnal swing
-  dies in the wall → interior |T̂| < 1 % of peak (DC-leak detector). Sheet:
-  `proofs/s2-m1.3/`; new harness assertion `assertSignFlip`.
-- `node --test`: **110/110**. `MIN_TESTS` 110.
-- **Not pushed/tagged.** M1.2 is committed (`a7bdac4`); M1.3 commit is the last one
-  on `main` (`git push` blocked for the agent — Operator pushes/tags).
-- **S2-H1.2 (human) still reserved:** Operator glances at `proofs/s2-m1.2/` +
-  `proofs/s2-m1.3/` sheets + the live 3D-WebGL view (ROADMAP touchpoint 2). Heads-up
-  the one taste knob is heat-flow glyph density (`GLYPH_TARGET` in viz2d.mjs).
+## State you're inheriting (S2-M1.4 done, 2026-06-22)
+- **S2-M1.2/M1.3/M1.4 done** (committed): heat-flow viz + `tools/proof.mjs`;
+  harmonic-swing view; **annual heat-loss curve (earth vs air)**.
+- **S2-M1.4 deliverables:**
+  - `src/losscurve.mjs` (pure, DOM-free): `regionFluxReal`, `regionFluxPhasor`,
+    `lossCurveSamples`, `lossAt` — the envelope-loss integral by superposition
+    over flux.mjs. Gates **S2-G1.4a** (reconstruction == direct, rel < 1e-7) /
+    **S2-G1.4b** (air mean loss > earth) in `test/losscurve.test.mjs`.
+  - New preset **`basement_air`** (`model.mjs`): the same cellar standing in air
+    (soil removed, outer faces on the air film). Same interior area as `basement`
+    → fair comparison.
+  - `worker.mjs` ships `loss:{earth,air}` (region-flux phasors; air only for
+    `basement`, via `computeLoss`) — computed **before** the Tre/Tim buffers are
+    transferred. New 3rd panel `src/lossview.mjs` (`LossView`) — earth-vs-air with
+    the gap shaded; on `window.__phasor.loss`.
+  - **Headline numbers:** earth mean loss **9.98 W**, air **40.85 W** →
+    **earth/air = 0.24** (soil cuts annual-mean loss to 24 %); earth annual swing
+    5.7 W vs air 37 W (soil damps); curves cross in summer (the ~2-month lag).
+- `node --test`: **112/112**. `MIN_TESTS` 112. Proof sheets: `proofs/s2-m1.2/`,
+  `proofs/s2-m1.3/`, `proofs/s2-m1.4/`.
+- **Not pushed/tagged.** Last commit (M1.4) is HEAD on `main` (`git push` blocked
+  for the agent — Operator pushes/tags). **S2-H1.2 (human) reserved:** Operator
+  glances at the three proof sheets + the live 3D view (ROADMAP touchpoint 2).
 
-## Driving the proof harness (learned this session)
-- The agent runs the capture snippet via `preview_eval`. **Read pixels after a
-  rAF wait** (`requestAnimationFrame` ×2) or `getImageData` sees an unpainted
-  canvas (n=0). Drive `window.__phasor` = `{ viz, slices, probe, loadPreset, solve,
-  ui }`; settle a solve by polling `slices.mean != null && /^solved/.test(#status)`.
-- The PNG dataURL exceeds the inline limit → **save it to a file** by returning
-  `canvas.toDataURL()+'!!!PAD!!!'+'A'.repeat(120000)` (forces the tool to dump to a
-  tool-results file); decode in node (slice `data:image/png;base64,…` to `!!!PAD!!!`).
-- **No `python` on PATH** — use node for base64/decoding.
+## ⚠ Two decisions to make at the START of this session (ROADMAP touchpoint 3)
+You now have M1.4's reduction factor (0.24) in hand, which is what these needed:
+1. **Where the 13370/12831 closed forms live.** Recommend **(a)** a pure
+   `src/standards.mjs` inside PHASOR so the annex calibration gate runs under
+   `node --test` (ROADMAP leans (a)); vs (b) Explainer-app only via the M1.6 JSON
+   seam. *(The HANDOFF/Operator said "confirm before building the comparison
+   panel" — that's now.)*
+2. **Steady ground-loss scope.** The steady total flux to the deep Dirichlet is
+   ~1/depth converged (~2.5 % under the default grid; physics, not under-sizing —
+   BACKLOG 2026-06-16). Either (a) scope the 13370 comparison to the **periodic**
+   part and show the steady-U limitation on screen *(lower risk, ~0.85)*, or
+   (b) deepen the boundary / apply an ISO-13370 characteristic correction for a
+   converged steady U *(more effort, ~0.6)*.
 
-## ⚠ Still-open item: the G2.5 wall-clock flake
-The G2.5 gate (48³ COCG < 10 s) flakes at its boundary under load (9.96–10.25 s)
-and intermittently fails the pre-commit hook. **Not a regression** (solver
-untouched). `node --test` is green on a light run; if a commit's hook trips,
-**retry on a quiet machine** (stop the preview server first — it adds load). Per
-CLAUDE.md the 10 s budget is a tolerance: **do not change/skip it without Operator
-sign-off.** The real fix is S2-M2 (performance) — pure-JS preconditioner first.
+## Your job this session: S2-M1.5 — comparison + the calibration gate
+Side-by-side: PHASOR earth / PHASOR air / DIN EN ISO 13370 annual-average /
+DIN EN 12831 max load; the reduction factor earth÷air **computed, not looked up**
+(M1.4 already gives 0.24). Closed forms in a pure helper (per decision 1).
+- **Gate FIRST — S2-G1.5 (auto, the calibration gate):** reproduce a DIN EN ISO
+  13370 annex worked example (steady + periodic) within the standard's own
+  rounding — the same discipline as the Trittschall app's `test/verify.js` vs
+  717-2 Annex C. This is the headline odds-shifter; write it before the panel.
+- Build the comparison readout/panel (reuse `LossView`/readout plumbing).
+- **Proof:** `tools/proof.mjs` → `proofs/s2-m1.5/`; batch the human glance with S2-H1.2.
 
-## Your job this session: S2-M1.4 — annual heat-loss curve, earth vs. air
-Integrate the envelope heat flux across the year by **superposition (no
-re-solve)** and chart it. "Air case" = the basement with the soil deleted /
-replaced by an exterior-air Robin BC. Use the chart-with-gap idiom (the bundled
-Trittschall app's measured-vs-reference chart is the reference pattern).
-- **Gate FIRST — S2-G1.4a (auto):** the reconstructed annual loss curve ==
-  direct superposition to solver tol (two ways to the same number).
-- **S2-G1.4b (auto):** the air-case solves, and its annual-mean loss **>** the
-  earth case (correct sign — earth damps/insulates).
-- The flux integral already lives in `flux.mjs` (`regionFlux`, gated G1.1d). The
-  worker likely needs to expose an **air-case solve** (soil→air Robin); see
-  ROADMAP S2-M1 "Touched" list (`worker.mjs`, `ui.mjs`).
-- **Proof:** run `tools/proof.mjs`, write `proofs/s2-m1.4/`; batch the human
-  glance with S2-H1.2.
+## Driving the proof harness (learned across M1.2–1.4)
+- Drive `window.__phasor` = `{ viz, slices, probe, loss, loadPreset, solve, ui }`;
+  settle with `slices.mean != null && /^solved/.test(#status)`.
+- **Read canvas pixels after a 2× `requestAnimationFrame` wait** (else `getImageData`
+  sees an unpainted canvas, n=0). **Count `alpha > 0`, not `== 255`** — line-art
+  panels (probe / loss) draw semi-transparent strokes over a transparent canvas.
+- PNG dataURL exceeds the inline limit → dump via `+'!!!PAD!!!'+'A'.repeat(120000)`
+  to force a tool-results file; decode in node (no `python` on PATH).
+- Open the target panel's `<details>` (and collapse the others) before capturing —
+  the loss panel is collapsed by default.
 
-## Standing rules (don't relearn the hard way)
-- **Gates before features; tolerances are law.** Write the gate first. **Run
-  `node tools/guardrails.mjs` before claiming green and before every commit** — it
-  is the pre-commit hook. Never set `GUARDRAILS_ALLOW_TOL_CHANGE` without Operator
-  sign-off this session. Raise `MIN_TESTS` when you add gates.
-- **One subgoal per session**, `node --test` green + committed between.
-- **2D = agent-verifiable (canvas pixels via proof.mjs); 3D WebGL = human channel.**
-- **Scope watch:** one gentle flag for out-of-scope / sloped / later-milestone work
-  (custom geometry stays box-based — DESIGN §1), then respect the choice; park in
-  BACKLOG.md. (M2 was floated 2026-06-22, then deferred — finish S2-M1 first.)
-- **Windows:** node on PATH (no `python`); `git push origin main` blocked for the
-  agent — Operator pushes/tags.
+## ⚠ Still-open: the G2.5 wall-clock flake
+G2.5 (48³ COCG < 10 s) flakes at its boundary under load and can trip the
+pre-commit hook. **Not a regression.** Run guardrails in the **foreground** on a
+quiet machine (stop the preview server first; never run the suite in the
+background — it gets starved, seen at 525 s once). Don't touch the budget without
+Operator sign-off. Real fix = S2-M2 (perf, pure-JS preconditioner first).
 
-## Open question (resolve before S2-M1.5)
-Where do the 13370/12831 closed forms live? Leaning **(a)** a pure
-`src/standards.mjs` inside PHASOR (keeps the 13370-annex calibration gate inside
-`node --test`); (b) only in the Explainer app via the JSON seam. Confirm with the
-Operator before building the comparison panel.
+## Standing rules
+- Gates before features; tolerances are law; raise `MIN_TESTS` when adding gates.
+- One subgoal per session, `node --test` + guardrails green + commit between.
+- 2D = agent-verifiable (canvas pixels via proof.mjs); 3D WebGL = human channel.
+- Scope watch: one gentle flag for out-of-scope / sloped / later-milestone work,
+  then respect the choice; park in BACKLOG.md.
+- Windows: node on PATH (no `python`); `git push origin main` blocked for the agent.
+
+## After M1.5: S2-M1.6 — export (Explainer seam)
+Versioned JSON/CSV of the computed numbers (readouts + loss curve + comparison).
+Gate S2-G1.6: schema validates; round-trip lossless; matches in-app readouts.
+Reuse `downloadBlob`/`exportText` (index.html) + the `lineProbeCSV` pattern. Then
+all of S2-M1 is green → tag `s2-m1-pass` (Operator) after the S2-H1.2 glance.

@@ -14,7 +14,7 @@
 //       Override only with Operator sign-off: GUARDRAILS_ALLOW_TOL_CHANGE=1.
 import { spawnSync } from 'node:child_process';
 
-const MIN_TESTS = 110; // raise when you add gates; LOWERING needs Operator sign-off
+const MIN_TESTS = 112; // raise when you add gates; LOWERING needs Operator sign-off
 
 let failures = 0;
 const fail = (m) => { console.error('  ✗ ' + m); failures++; };

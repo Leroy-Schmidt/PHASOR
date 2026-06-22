@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>PHASOR S2-M1.4 — annual heat-loss curve (earth vs. air, basement)</title>
+<style>
+  body{background:#0e1013;color:#cfd3d8;font:14px/1.5 system-ui,sans-serif;margin:0;padding:24px}
+  h1{font-size:18px;color:#e8a33d} .verdict{font-weight:700;padding:4px 10px;border-radius:4px}
+  .verdict.ok{background:#1d3a16;color:#9be07d} .verdict.bad{background:#3a1616;color:#e0533d}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:16px}
+  .card{background:#14161a;border-radius:8px;padding:12px} .card h2{font-size:14px;margin:0 0 8px}
+  .card img{width:100%;border-radius:4px;background:#000;image-rendering:pixelated}
+  .meta{font:11px ui-monospace,monospace;color:#8a919a;margin:8px 0;word-break:break-all}
+  .readouts{font-size:12px;color:#cfd3d8;margin:6px 0}
+  .checks{list-style:none;padding:0;margin:8px 0 0;font-size:12px}
+  .checks .ok{color:#9be07d} .checks .bad{color:#e0533d}
+</style>
+<h1>PHASOR S2-M1.4 — annual heat-loss curve (earth vs. air, basement) &nbsp; <span class="verdict ok">ALL PIXEL CHECKS PASS</span></h1>
+<p>2D-canvas proof sheet (the agent-verifiable channel). Glance + sign; then look at the live 3D view.</p>
+<div class="grid"><section class="card">
+      <h2>basement-heatloss-earth-vs-air</h2>
+      <img src="basement-heatloss-earth-vs-air.png" alt="basement-heatloss-earth-vs-air">
+      <div class="meta">{"preset":"basement","panel":"Annual heat loss","marker":"~day 15 (winter)","reductionFactor":0.244}</div>
+      <div class="readouts">Annual heat loss, basement (corner-of-cellar cross-section). Earth (buried): mean 9.98 W, swings 4.0-15.9 W, damped + lagged by the soil. Air (same cellar exposed): mean 40.85 W, swings 0.3-93.3 W, tracks the outdoor wave directly. Reduction earth/air = 0.24 -> soil cuts the annual-mean loss to 24%. Curves cross in summer (the ~2-month soil lag). By superposition, never a re-solve.</div>
+      <ul class="checks"><li class="ok">✓ <b>both-curves-drawn</b> — earth (amber) 383 px + air (red) 1909 px both present</li><li class="ok">✓ <b>reduction-factor-<1 (soil insulates)</b> — earth/air mean loss = 0.244 (earth 9.98 W < air 40.85 W)</li><li class="ok">✓ <b>air-swings-more (undamped)</b> — air swing 93.0 W ≫ earth swing 11.9 W</li></ul>
+    </section></div>

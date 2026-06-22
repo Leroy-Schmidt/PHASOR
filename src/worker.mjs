@@ -12,6 +12,7 @@ import { cg, cocg } from './solver.mjs';
 import {
   fRsi, uValue, psiExternal, climatePhasor, amplitude, timeLag, OMEGA_BY_FREQ,
 } from './physics.mjs';
+import { regionFluxReal, regionFluxPhasor } from './losscurve.mjs';
 
 /**
  * Build grid + paint + assemble + CG-solve one steady (ω = 0) problem.
@@ -170,6 +171,26 @@ export function steadyReadouts(presetDef, materials, { tol = 1e-10, maxIter = 20
   };
 }
 
+/**
+ * Annual heat-loss phasors for a region (S2-M1.4): a steady solve + one harmonic
+ * solve per frequency, reduced to region-flux phasors { mean, harmonics } by
+ * superposition. Used for the air-case comparison (a fresh, independent solve);
+ * the main preset reuses its already-computed fields in the worker loop instead.
+ * Returns null if the preset has no such Robin region.
+ */
+export function computeLoss(presetDef, materials, region, { tol = 1e-10 } = {}) {
+  const steady = solveSteady(presetDef, materials, { tol });
+  if (!steady.problem.robinFaces.some((f) => f.region === region)) return null;
+  const mean = regionFluxReal(steady.problem, steady.T, region);
+  const harmonics = [];
+  for (const f of ['annual', 'diurnal']) {
+    const omega = OMEGA_BY_FREQ[f];
+    const h = solveHarmonic(presetDef, materials, { omega, tol });
+    harmonics.push({ f, omega, ...regionFluxPhasor(steady.problem, h.Tre, h.Tim, region) });
+  }
+  return { mean, harmonics };
+}
+
 // --------------------------------------------------------- worker wiring
 // `self` exists in a Worker scope but not under plain node (`node --test`).
 if (typeof self !== 'undefined' && typeof window === 'undefined') {
@@ -189,6 +210,13 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
       // forcing whose phase the phase-lag map references (so the surface reads ≈0).
       const extBc = presetDef.bcs.find((b) => b.name === 'exterior' && b.type === 'robin');
 
+      // annual heat-loss curve (S2-M1.4): region-flux phasors for the heated
+      // interior, accumulated from the same harmonic fields (computed BEFORE the
+      // Tre/Tim buffers are transferred away). For 'basement', also solve the
+      // air-case sibling so the panel can show the earth-vs-air gap.
+      const hasInterior = presetDef.bcs.some((b) => b.name === 'interior' && b.type === 'robin');
+      const lossHarm = [];
+
       const harmonics = [];
       const transfer = [out.T.buffer];
       for (const f of ['annual', 'diurnal']) {
@@ -197,6 +225,9 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
         const h = solveHarmonic(presetDef, MATERIALS, { omega, tol });
         const extHarm = (extBc?.T?.harmonics ?? []).find((hh) => hh.f === f);
         const ref = extHarm ? climatePhasor(extHarm, omega) : { re: 1, im: 0 };
+        if (hasInterior) {
+          lossHarm.push({ f, omega, ...regionFluxPhasor(out.problem, h.Tre, h.Tim, 'interior') });
+        }
         harmonics.push({
           f, omega, re: h.Tre.buffer, im: h.Tim.buffer,
           refRe: ref.re, refIm: ref.im,
@@ -205,8 +236,16 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
         transfer.push(h.Tre.buffer, h.Tim.buffer);
       }
 
+      let loss = null;
+      if (hasInterior) {
+        loss = { earth: { mean: regionFluxReal(out.problem, out.T, 'interior'), harmonics: lossHarm } };
+        if (presetName === 'basement') {
+          loss.air = computeLoss(presets.basement_air({}), MATERIALS, 'interior', { tol });
+        }
+      }
+
       self.postMessage(
-        { id, type: 'result', T: out.T.buffer, readouts: out.readouts, stats: out.stats, harmonics },
+        { id, type: 'result', T: out.T.buffer, readouts: out.readouts, stats: out.stats, harmonics, loss },
         transfer,
       );
     } catch (err) {

@@ -1,8 +1,27 @@
-# PHASOR — session kickoff: S2-M1.5 comparison + "validate the standard"
+# PHASOR — session kickoff: S2-M1.5 part 2 (comparison panel + steady pinning)
 
 Read `ROADMAP.md` (Stage-2 plan, priority layer above BACKLOG), CLAUDE.md,
 VALIDATION.md (tail), and `git log --oneline -8`. **Stage 1 (M0–M5) is sealed.**
 Stage 2 keeps Operator involvement low: gate headlessly, sign pre-built proofs.
+
+## ⚠ Read first — M1.5 part 1 is DONE; two things gate part 2
+- **S2-M1.5 part 1 committed (`12eb0a9`):** `src/standards.mjs` (13370 + 12831
+  closed forms) + the **S2-G1.5 calibration gate** (`node --test` 115/115).
+  Finding: DIN EN ISO 13370:2018 has **no worked numeric example** (companion
+  ISO/TR docs hold those), so the gate anchors on the standard's published
+  **Table H.1** δ (2.2/3.2/4.2 m, reproduced from Table 7 via Eq H.1) + the
+  z=0→slab reduction identity — non-circular. That's the rigorous core banked.
+- **Operator flagged the VIEW needs rework** (2026-06-22, details pending —
+  BACKLOG). Part 2 adds a *comparison view*, so **coordinate with that rework**
+  before investing in a polished comparison panel — or you'll redo it.
+- **The 13370-vs-PHASOR comparison is real modeling, not a readout.** Worked it
+  out for `basement` (2D strip: B'=full width 4 m, z=2.5 m, bare concrete, soil
+  λ=2.0=Table7 sand/gravel): **13370 ≈ 36.5 W/m vs PHASOR ≈ 49.9 W/m (ratio
+  0.73, ~27 % gap).** Same order + sign, but loose — reconciling it **is** the
+  steady-baseline-pinning task (decision 2): PHASOR's finite domain + deep-
+  Dirichlet sink + surface-driven BC measure a subtly different thing than
+  13370's equivalent-thickness idealization. Expect a "compare, investigate,
+  ±human-judgment" outcome (G3.3 spirit), not a tight auto gate.
 
 ## State you're inheriting (S2-M1.4 done, 2026-06-22)
 - **S2-M1.2/M1.3/M1.4 done** (committed): heat-flow viz + `tools/proof.mjs`;
@@ -46,16 +65,24 @@ Stage 2 keeps Operator involvement low: gate headlessly, sign pre-built proofs.
    stop moving as you deepen further (the opposite of the ~2.5 %/doubling drift
    that motivated this).
 
-## Your job this session: S2-M1.5 — comparison + the calibration gate
-Side-by-side: PHASOR earth / PHASOR air / DIN EN ISO 13370 annual-average /
-DIN EN 12831 max load; the reduction factor earth÷air **computed, not looked up**
-(M1.4 already gives 0.24). Closed forms in a pure helper (per decision 1).
-- **Gate FIRST — S2-G1.5 (auto, the calibration gate):** reproduce a DIN EN ISO
-  13370 annex worked example (steady + periodic) within the standard's own
-  rounding — the same discipline as the Trittschall app's `test/verify.js` vs
-  717-2 Annex C. This is the headline odds-shifter; write it before the panel.
-- Build the comparison readout/panel (reuse `LossView`/readout plumbing).
+## Your job this session: S2-M1.5 part 2 — comparison + steady pinning
+The calibration gate (part 1) is done. What remains is the side-by-side
+comparison + reconciling the steady gap. **The standards math + the gate already
+exist** in `src/standards.mjs` / `test/standards.test.mjs` — reuse them.
+- **Steady pinning (decision 2) FIRST — it's the gating modeling work.** Pin a
+  *converged* PHASOR steady basement loss (deepen the deep-Dirichlet boundary, or
+  apply the ISO-13370 correction) and reconcile the 0.73 ratio above. Confirm
+  convergence: the steady loss stops drifting as you deepen (vs the ~2.5 %/
+  doubling baseline). Mind perf (deeper = bigger grid; G2.5 / 5 s budget) — a
+  **dedicated coarse-but-deep calibration solve** separate from the display solve
+  is the likely move. Be honest if it stays loose: a cross-method ±human call
+  (G3.3 spirit), not a tight auto gate.
+- **Comparison view** — PHASOR earth / air / 13370 / 12831 side by side; reduction
+  factor earth÷air **computed** (M1.4 gives 0.24). **Hold for the view rework** —
+  fold it into whatever the Operator decides for the viz, rather than building a
+  standalone panel that gets redone. A text readout is a safe interim.
 - **Proof:** `tools/proof.mjs` → `proofs/s2-m1.5/`; batch the human glance with S2-H1.2.
+- 12831 design (max) load is a one-liner via `standards.designHeatLoad(H, θi, θe)`.
 
 ## Driving the proof harness (learned across M1.2–1.4)
 - Drive `window.__phasor` = `{ viz, slices, probe, loss, loadPreset, solve, ui }`;

@@ -98,6 +98,11 @@ sequenced, gated plan; this file is the unsorted pool it draws from.
   (13370/12831/f_Rsi/4108) — domain-specific, don't drag it along; thermal
   vocabulary/units; and the assumption that the solver stack transfers wholesale
   — the eigen path is a new beast the current COCG-only stack doesn't cover.
+- 2026-06-22 — **Viz UX rework (Operator flag, details pending).** The Operator
+  flagged that "the view" doesn't do what users will like / expect — to revisit
+  after M1. Details to come; likely touches the field-mode presentation
+  (T(t)/swing/amplitude/phase/flux) and/or the panel layout. Capture the specifics
+  when given, then scope against S2-M4 (UI / self-explanatory).
 - 2026-06-12 — Watch: orbit-rotate occasionally stalled with a `not-allowed`
   cursor. Applied preventive CSS (`user-select:none` on #view, `touch-action:none`
   + `-webkit-user-drag:none` on the canvas). If it resurfaces, suspect a

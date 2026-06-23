@@ -171,7 +171,7 @@ lossSec.details.addEventListener('toggle', () => loss.requestRender());
 // the 3D model with no second physics path and no re-solve.
 let currentModel = null;
 slices.onFieldUpdate = (f) => {
-  if (currentModel) viz.setFieldSlice(currentModel, f.T, f.range, f.cm, f.frac);
+  if (currentModel) viz.setField(currentModel, f); // f: {kind,field,range,cm,fluxQ} | null
 };
 
 // export buttons: PNG on each panel + the 3D view, CSV on the line probe
@@ -367,19 +367,25 @@ function renderReadouts(r) {
   readouts.innerHTML = `${fLine}<br>${psiLine}<br>${phiLine}`;
 }
 
+// the cutting plane: clip + field on the cut. When cutting along z, sync the 2D
+// panel's slice so the flat XY view and the 3D cut show the same plane.
+const applyCut = (axis, frac) => {
+  viz.setCut(axis, frac);
+  if (axis === 'z') slices.setSlice(frac);
+};
 const ui = buildUI(Object.keys(presets), {
   onPreset: (name) => {
     loadPreset(name, { layers: layersWithInsulation(ui.insulation) });
-    viz.setClip(ui.clipAxis, ui.clipPosition);
+    applyCut(ui.cutAxis, ui.cutPosition);
     invalidate('');
     solve();
   },
-  onClip: (axis, frac) => viz.setClip(axis, frac),
+  onCut: (axis, frac) => applyCut(axis, frac),
   onInsulation: (t) => {
     // live geometry preview while dragging ("look before you solve"); the solve
     // fires once on release via onInsulationCommit — no solve flood, no freeze.
     loadPreset(current.name, { layers: layersWithInsulation(t) });
-    viz.setClip(ui.clipAxis, ui.clipPosition);
+    applyCut(ui.cutAxis, ui.cutPosition);
     invalidate('updating…');
   },
   onInsulationCommit: () => solve(),
@@ -387,11 +393,13 @@ const ui = buildUI(Object.keys(presets), {
   onField: (mode) => slices.setMode(mode),
   onFreq: (f) => { slices.setFreq(OMEGA[f]); probe.setFreq(OMEGA[f]); },
   onFreqToggle: (f, on) => slices.setEnabled(f, on),
-  onGlyphs: (on) => slices.setGlyphs(on),
+  onGlyphs: (on) => { slices.setGlyphs(on); viz.setArrows(on); },
 });
 slices.setGlyphs(ui.arrows);
+viz.setArrows(ui.arrows);
 
 loadPreset(ui.preset, { layers: layersWithInsulation(ui.insulation) });
+applyCut(ui.cutAxis, ui.cutPosition);
 slices.setSlice(ui.sliceZ);
 solve();
 window.__phasor = { viz, slices, probe, loss, loadPreset, solve, ui }; // debug handle (console / tests)

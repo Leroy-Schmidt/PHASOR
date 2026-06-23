@@ -98,14 +98,14 @@ test('G1.1d — regionFlux equals boundaryFlux per Robin region on wall1d (indep
 });
 
 // ------------------------------------------------------------------ G1.2b
-test('G1.2b — fluxGlyphs: count == stride sampling, direction == −∇T, length ∝ clamped |q|', () => {
+test('G1.2b — fluxGlyphs (z-cut): count == stride sampling, direction == −∇T, length ∝ clamped |q|', () => {
   // synthetic 4×4×1 cell grid; cell centres at 0.5,1.5,2.5,3.5
   const nx = 4;
   const ny = 4;
   const nz = 1;
   const xs = Float64Array.from([0, 1, 2, 3, 4]);
   const ys = Float64Array.from([0, 1, 2, 3, 4]);
-  const grid = { nx, ny, nz, xs, ys };
+  const grid = { nx, ny, nz, xs, ys, zs: Float64Array.from([0, 1]) };
   const nCells = nx * ny * nz;
   const qx = new Float64Array(nCells);
   const qy = new Float64Array(nCells);
@@ -115,7 +115,8 @@ test('G1.2b — fluxGlyphs: count == stride sampling, direction == −∇T, leng
   const q = { qx, qy, qz, nx, ny, nz };
 
   // stride 2 → sample i∈{0,2}, j∈{0,2} → 4 cells, all non-void → 4 glyphs
-  const { glyphs, scale } = fluxGlyphs(q, grid, 0, { stride: 2 });
+  const { glyphs, scale, inPlane } = fluxGlyphs(q, grid, 0, { stride: 2 }); // axis 'z' default
+  assert.deepEqual(inPlane, [0, 1], 'z-cut in-plane axes are x,y');
   assert.equal(glyphs.length, 4, 'count must equal the stride sampling of solid cells');
 
   // auto scale == max in-plane |q| over the SAMPLED cells (not the whole grid):
@@ -126,18 +127,53 @@ test('G1.2b — fluxGlyphs: count == stride sampling, direction == −∇T, leng
 
   for (const gph of glyphs) {
     // cell-centre position lands on a half-integer (xs/ys spacing 1)
-    assert.ok(Number.isInteger(gph.x - 0.5) && Number.isInteger(gph.y - 0.5), 'centre coords');
+    assert.ok(Number.isInteger(gph.a - 0.5) && Number.isInteger(gph.b - 0.5), 'centre coords');
     // direction is the normalized in-plane (qx,qy) = −∇T direction
-    const mag = Math.hypot(gph.ux, gph.uy);
+    const mag = Math.hypot(gph.ua, gph.ub);
     assert.ok(Math.abs(mag - 1) < 1e-12, 'direction must be unit length');
-    assert.ok(Math.abs(gph.ux - 1 / Math.SQRT2) < 1e-12, 'ux'); // qx>0, qy=−qx
-    assert.ok(Math.abs(gph.uy + 1 / Math.SQRT2) < 1e-12, 'uy');
+    assert.ok(Math.abs(gph.ua - 1 / Math.SQRT2) < 1e-12, 'ua'); // qx>0, qy=−qx
+    assert.ok(Math.abs(gph.ub + 1 / Math.SQRT2) < 1e-12, 'ub');
     // length is clamped |q|/scale ∈ [0,1]
     assert.ok(gph.len > 0 && gph.len <= 1 + 1e-12, `len in (0,1]: ${gph.len}`);
     assert.ok(Math.abs(gph.len - Math.min(1, gph.mag / scale)) < 1e-12, 'len ∝ clamped |q|/scale');
   }
   // the max-magnitude sampled glyph saturates to len == 1
   assert.ok(glyphs.some((g) => Math.abs(g.len - 1) < 1e-12), 'max glyph saturates');
+});
+
+test('G1.2b — fluxGlyphs: axis x/y/z select the right in-plane components + cell layer', () => {
+  // 3×3×3 grid, unit cells; encode the cell index into the flux components so we
+  // can check the sampler reads the right axis layer and (q_a, q_b).
+  const nx = 3;
+  const ny = 3;
+  const nz = 3;
+  const lin = Float64Array.from([0, 1, 2, 3]);
+  const grid = { nx, ny, nz, xs: lin, ys: lin, zs: lin };
+  const N = nx * ny * nz;
+  const qx = new Float64Array(N);
+  const qy = new Float64Array(N);
+  const qz = new Float64Array(N);
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const c = i + nx * (j + ny * k);
+    qx[c] = i + 1; qy[c] = 10 * (j + 1); qz[c] = 100 * (k + 1); // distinguishable
+  }
+  const q = { qx, qy, qz, nx, ny, nz };
+
+  // x-cut at i=1: in-plane (y,z) → (q_a,q_b) = (qy,qz); 9 cells (3×3), all in i=1 layer
+  const xc = fluxGlyphs(q, grid, 1, { axis: 'x', stride: 1, scale: 1e9 });
+  assert.deepEqual(xc.inPlane, [1, 2], 'x-cut in-plane axes are y,z');
+  assert.equal(xc.glyphs.length, 9);
+  for (const g of xc.glyphs) {
+    // direction components come from qy (a) and qz (b), all positive here
+    assert.ok(g.ua > 0 && g.ub > 0, 'x-cut uses qy,qz');
+    assert.ok(g.ub > g.ua, 'qz (100·) dominates qy (10·) → ub > ua');
+  }
+  // y-cut at j=2: in-plane (x,z) → (qx,qz)
+  const yc = fluxGlyphs(q, grid, 2, { axis: 'y', stride: 1, scale: 1e9 });
+  assert.deepEqual(yc.inPlane, [0, 2], 'y-cut in-plane axes are x,z');
+  assert.equal(yc.glyphs.length, 9);
+  // sanity: z-cut count matches too
+  assert.equal(fluxGlyphs(q, grid, 0, { axis: 'z', stride: 1, scale: 1e9 }).glyphs.length, 9);
 });
 
 test('G1.2b — fluxGlyphs: void / zero-flux cells produce no glyph; explicit scale clamps', () => {

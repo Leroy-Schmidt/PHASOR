@@ -121,39 +121,55 @@ export function regionFlux(problem, q, region) {
   return sum;
 }
 
+const AXIS = { x: 0, y: 1, z: 2 };
+
 /**
- * Vector-glyph LAYOUT for the heat-flow viz (S2-M1.2). Pure and DOM-free so the
- * arrow placement is unit-tested independently of the canvas that draws it.
+ * Vector-glyph LAYOUT for the heat-flow viz (S2-M1.2; axis-generalized in the 3D
+ * view rework). Pure and DOM-free so the arrow placement is unit-tested
+ * independently of the canvas/WebGL that draws it.
  *
- * One glyph per solid cell sampled on a stride, at the XY slice layer `k`. The
- * direction is the normalized in-plane flux (qx, qy) — i.e. the −∇T direction,
- * since q = −λ∇T with λ > 0 — and the length is the clamped magnitude
- * |q_xy| / scale ∈ [0, 1] (the renderer multiplies by a pixel length). Void /
- * zero-flux cells (q = 0 there) yield no glyph.
+ * One glyph per solid cell sampled on a stride, on the slice plane whose NORMAL
+ * is `axis` at layer index `idx`. The two in-plane axes (a, b) are the other two
+ * in x<y<z order: z-cut → (x,y); x-cut → (y,z); y-cut → (x,z). The direction is
+ * the normalized in-plane flux (q_a, q_b) — the −∇T direction, λ>0 — and the
+ * length is the clamped magnitude |q_ab|/scale ∈ [0,1] (the renderer scales it).
+ * Void / zero-flux cells (q = 0 there) yield no glyph.
  *
- * @param {{qx,qy: Float64Array, nx,ny,nz: number}} q — from `cellFlux`
- * @param {{nx,ny,nz: number, xs,ys: ArrayLike<number>}} grid — for cell centres
- * @param {number} k — slice cell layer
- * @param {{stride?: number, scale?: number}} [opts] — sampling stride (≥1) and
- *   the magnitude mapping to len = 1; if omitted, scale = max |q_xy| over the
- *   sampled solid cells (so the strongest sampled arrow saturates to 1).
- * @returns {{glyphs: Array<{x,y,ux,uy,mag,len: number}>, scale: number}}
- *   x,y are cell-centre coordinates (metres).
+ * @param {{qx,qy,qz: Float64Array, nx,ny,nz: number}} q — from `cellFlux`
+ * @param {{nx,ny,nz: number, xs,ys,zs: ArrayLike<number>}} grid — for cell centres
+ * @param {number} idx — slice cell layer along the normal axis
+ * @param {{stride?: number, scale?: number, axis?: 'x'|'y'|'z'}} [opts]
+ *   `axis` = slice-plane normal (default 'z'); `stride` ≥ 1; `scale` maps to
+ *   len = 1 (default: max |q_ab| over the sampled solid cells).
+ * @returns {{glyphs: Array<{a,b,ua,ub,mag,len: number}>, inPlane: [number,number],
+ *   scale: number}} a,b are cell-centre coords (m) on the in-plane axes.
  */
-export function fluxGlyphs(q, grid, k, { stride = 1, scale } = {}) {
-  const { qx, qy, nx, ny } = q;
-  const { xs, ys } = grid;
+export function fluxGlyphs(q, grid, idx, { stride = 1, scale, axis = 'z' } = {}) {
+  const { nx, ny } = q;
   const s = Math.max(1, Math.floor(stride));
+  const axisN = AXIS[axis];
+  const [pa, pb] = [0, 1, 2].filter((d) => d !== axisN); // in-plane axes, x<y<z
+  const COORD = [grid.xs, grid.ys, grid.zs];
+  const COMP = [q.qx, q.qy, q.qz];
+  const N = [grid.nx, grid.ny, grid.nz];
+  const coordsA = COORD[pa];
+  const coordsB = COORD[pb];
+  const qA = COMP[pa];
+  const qB = COMP[pb];
 
   // pass 1: collect sampled solid (non-zero-flux) cells + in-plane magnitudes
+  const ijk = [0, 0, 0];
+  ijk[axisN] = idx;
   const picks = [];
   let maxMag = 0;
-  for (let j = 0; j < ny; j += s) {
-    for (let i = 0; i < nx; i += s) {
-      const c = i + nx * (j + ny * k);
-      const mag = Math.hypot(qx[c], qy[c]);
+  for (let ib = 0; ib < N[pb]; ib += s) {
+    ijk[pb] = ib;
+    for (let ia = 0; ia < N[pa]; ia += s) {
+      ijk[pa] = ia;
+      const c = ijk[0] + nx * (ijk[1] + ny * ijk[2]);
+      const mag = Math.hypot(qA[c], qB[c]);
       if (mag === 0) continue; // void / zero flux → no arrow
-      picks.push({ i, j, c, mag });
+      picks.push({ ia, ib, c, mag });
       if (mag > maxMag) maxMag = mag;
     }
   }
@@ -161,16 +177,16 @@ export function fluxGlyphs(q, grid, k, { stride = 1, scale } = {}) {
   const sc = scale != null ? scale : maxMag;
   const glyphs = [];
   if (sc > 0) {
-    for (const { i, j, c, mag } of picks) {
+    for (const { ia, ib, c, mag } of picks) {
       glyphs.push({
-        x: (xs[i] + xs[i + 1]) / 2,
-        y: (ys[j] + ys[j + 1]) / 2,
-        ux: qx[c] / mag,
-        uy: qy[c] / mag,
+        a: (coordsA[ia] + coordsA[ia + 1]) / 2,
+        b: (coordsB[ib] + coordsB[ib + 1]) / 2,
+        ua: qA[c] / mag,
+        ub: qB[c] / mag,
         mag,
         len: Math.min(1, mag / sc),
       });
     }
   }
-  return { glyphs, scale: sc };
+  return { glyphs, inPlane: [pa, pb], scale: sc };
 }

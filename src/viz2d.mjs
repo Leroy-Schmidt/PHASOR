@@ -119,14 +119,21 @@ export class SlicePanel {
     }
   }
 
-  /** Notify the 3D field plane of the current displayed field / slice position. */
+  /**
+   * Hand the displayed field to the 3D cutting plane as full-grid arrays (the 3D
+   * view owns the cut axis/position and samples them itself). Flux mode ships the
+   * per-cell |q| + the flux vectors for arrows; the other modes ship the nodal
+   * field. Decoupled from the 2D panel's own z-slice.
+   */
   _emitField() {
     if (!this.onFieldUpdate) return;
-    // |q| mode paints a cell field the 3D plane can't take, so it overrides the
-    // emit with the nodal T(t); other modes mirror the display directly.
-    const e = this._emitOverride;
-    if (e) this.onFieldUpdate({ T: e.T, range: e.range, cm: e.cm, frac: this.frac });
-    else this.onFieldUpdate({ T: this.T, range: this.range, cm: this._cm, frac: this.frac });
+    if (this.cellField) {
+      this.onFieldUpdate({ kind: 'cell', field: this.cellField, range: this.range, cm: this._cm, fluxQ: this._fluxQ });
+    } else if (this.T) {
+      this.onFieldUpdate({ kind: 'nodal', field: this.T, range: this.range, cm: this._cm, fluxQ: null });
+    } else {
+      this.onFieldUpdate(null);
+    }
   }
 
   /** Per-cell λ from the model (materials[id].lambda), void → 0. For client-side
@@ -346,10 +353,6 @@ export class SlicePanel {
       this._cm = fluxCm;
       this.unit = 'W/m²';
       this._field = 'Heat flow |q| [W/m²]';
-      this._emitOverride = {
-        T: vals, cm: diverging,
-        range: this._instantRange ?? this.rangeOverSolid(vals),
-      };
       this.requestRender();
       this._emitField();
       return;
@@ -606,12 +609,13 @@ export class SlicePanel {
       ctx.lineCap = 'round';
       ctx.beginPath();
       for (const gph of glyphs) {
-        const cx = pxOf(gph.x);
-        const cy = pyOf(gph.y);
+        // 2D panel is the XY (z-cut) plane → in-plane (a,b) = (x,y)
+        const cx = pxOf(gph.a);
+        const cy = pyOf(gph.b);
         const L = gph.len * maxLen;
         if (L < 1) continue;
-        const dx = gph.ux * L;
-        const dy = -gph.uy * L; // screen y is flipped relative to physical y
+        const dx = gph.ua * L;
+        const dy = -gph.ub * L; // screen y is flipped relative to physical y
         const hx = cx + dx / 2;
         const hy = cy + dy / 2;
         const tx = cx - dx / 2;

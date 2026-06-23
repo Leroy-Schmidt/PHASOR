@@ -23,7 +23,7 @@ const INSULATION_PRESETS = new Set(['wall1d', 'corner2d']);
 /**
  * @param {string[]} presetNames
  * @param {{onPreset: (name: string) => void,
- *          onClip: (axis: 'x'|'y'|'z', frac: number) => void,
+ *          onCut: (axis: 'x'|'y'|'z', frac: number) => void,
  *          onInsulation: (thickness: number) => void,
  *          onInsulationCommit: () => void,
  *          onSlice: (frac: number) => void,
@@ -35,8 +35,8 @@ const INSULATION_PRESETS = new Set(['wall1d', 'corner2d']);
 export function buildUI(presetNames, handlers) {
   const state = {
     preset: presetNames[0],
-    clipAxis: 'x',
-    clipPosition: 1.0,
+    cutAxis: 'z',
+    cutPosition: 0.5,
     insulation: 0.16,
     sliceZ: 0.5,
     field: 'T(t) instantaneous',
@@ -50,12 +50,14 @@ export function buildUI(presetNames, handlers) {
   gui.add(state, 'preset', presetNames)
     .name('Preset')
     .onChange((v) => handlers.onPreset(v));
-  gui.add(state, 'clipAxis', ['x', 'y', 'z'])
-    .name('Clip axis')
-    .onChange(() => handlers.onClip(state.clipAxis, state.clipPosition));
-  gui.add(state, 'clipPosition', 0, 1, 0.01)
-    .name('Clip position')
-    .onChange(() => handlers.onClip(state.clipAxis, state.clipPosition));
+  // One cutting plane: clips the 3D object AND carries the field (colormap +
+  // arrows) on the exposed cut face. Axis = the plane normal.
+  gui.add(state, 'cutAxis', ['x', 'y', 'z'])
+    .name('Cut axis')
+    .onChange(() => handlers.onCut(state.cutAxis, state.cutPosition));
+  gui.add(state, 'cutPosition', 0, 1, 0.01)
+    .name('Cut position')
+    .onChange(() => handlers.onCut(state.cutAxis, state.cutPosition));
   // Insulation: drag repaints geometry live ("look before you solve"); the solve
   // fires once on release (onFinishChange) — Worker-discipline, no solve flood.
   const insulationCtrl = gui.add(state, 'insulation', 0.02, 0.30, 0.005)

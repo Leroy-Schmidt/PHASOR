@@ -2,8 +2,12 @@
 // material voxels with a movable clip plane. Gains in-scene slice planes in M4.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { cellIndex, nodeIndex } from './grid.mjs';
+import { cellIndex } from './grid.mjs';
 import { symmetryTransforms, mirroredExtent } from './symmetry.mjs';
+import { planeAxes, nearestLayers, sampleField } from './slice.mjs';
+import { fluxGlyphs } from './flux.mjs';
+
+const AXIS_N = { x: 0, y: 1, z: 2 };
 
 export class Viz3D {
   /** @param {HTMLElement} container */
@@ -25,14 +29,24 @@ export class Viz3D {
     sun.position.set(3, 5, 4);
     this.scene.add(sun);
 
-    this.clipPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 1e6);
+    this.clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 1e6);
     this.groups = [];  // voxel groups: [base, ...symmetry mirrors] (one per reflection)
     this.extent = null;
     // quarter-symmetry mirror (M5 full-cellar view): the reflection transforms
     // applied to the solved quadrant for DISPLAY. null/[] → no mirror (one copy).
     this.symmetryAxes = null;
     this.mirrorTransforms = [{ scale: [1, 1, 1], offset: [0, 0, 0] }];
-    this.field = null; // in-scene field slice plane (M4): { mesh, texture, data, key, mirrors }
+
+    // The cutting plane (view rework): one plane that BOTH clips the geometry and
+    // carries the field (colormap + arrows) on the exposed cut face. `cutAxis` is
+    // its normal (x/y/z), `cutFrac` its position along that axis (0..1 of extent;
+    // 1 ⇒ no clip). Default z, matching the 2D XY field panel.
+    this.cutAxis = 'z';
+    this.cutFrac = 0.5;
+    this.arrows = true;            // draw flux arrows on the cut (flux mode)
+    this._model = null;            // { grid, painted, materials } for re-sampling
+    this._fieldData = null;        // last emitted { kind, field, range, cm, fluxQ }
+    this.field = null;             // { mesh, texture, data, texW, texH, key, mirrors, arrowGroup }
 
     // render on demand: redraw only on camera moves, resizes, model changes
     this.render = () => this.renderer.render(this.scene, this.camera);
@@ -179,166 +193,228 @@ export class Viz3D {
   }
 
   /**
-   * Paint a temperature/amplitude/phase field ONTO the model as an in-scene slice
-   * plane (DESIGN §6 — the M4 headline). The plane mirrors the 2D SlicePanel's
-   * field exactly (same values, range, colormap), so the field breathes on the 3D
-   * model as the scrubber sweeps — no second physics path, no re-solve.
-   *
-   * Geometry (an XY quad at the slice z) is rebuilt only when the model or slice
-   * position changes; the per-scrub-tick call just refills the texture, which is
-   * cheap enough for ≥ 30 fps (G4.1).
-   *
-   * @param {{grid: object, painted: object, materials: object}} model
-   * @param {Float64Array} T nodal field for this model's grid
-   * @param {[number, number]} range [lo, hi] used by the colormap (panel's range)
-   * @param {(t: number) => [number, number, number]} cm colormap (colormap.mjs)
-   * @param {number} fracZ slice position along z, 0..1 of the z extent
+   * Store the displayed field and render it on the cutting plane. The payload is
+   * the 2D panel's field, decoupled from any plane: full-grid arrays the cut
+   * samples on whatever axis it faces.
+   * @param {{grid, painted, materials: object}} model
+   * @param {null | {kind: 'nodal'|'cell', field: Float64Array,
+   *   range: [number, number], cm: Function, fluxQ: object|null}} payload
    */
-  setFieldSlice(model, T, range, cm, fracZ) {
-    if (!T || !range) { this.clearFieldSlice(); return; }
-    const { grid, painted, materials } = model;
-    const { xs, ys, zs, nx, ny, nz } = grid;
-    const xmin = xs[0];
-    const ymin = ys[0];
-    const spanX = xs[nx] - xmin;
-    const spanY = ys[ny] - ymin;
+  setField(model, payload) {
+    this._model = model;
+    this._fieldData = payload;
+    if (!payload || !payload.field || !payload.range) { this.clearFieldSlice(); return; }
+    this._rebuildField();
+    this.render();
+  }
 
-    // nearest node plane (field) and the cell layer it reads materials from
-    const zCoord = zs[0] + fracZ * (zs[nz] - zs[0]);
-    let kNode = 0;
-    for (let k = 1; k <= nz; k++) {
-      if (Math.abs(zs[k] - zCoord) < Math.abs(zs[kNode] - zCoord)) kNode = k;
+  /** Toggle the flux arrows on the cut (flux mode only). */
+  setArrows(on) { this.arrows = !!on; this._rebuildField(); this.render(); }
+
+  /**
+   * Move the single cutting plane: it BOTH clips the geometry (far side removed)
+   * and carries the field on the exposed cut face — one plane, no separate clip.
+   * @param {'x'|'y'|'z'} axis — plane normal
+   * @param {number} frac — 0..1 of the extent; 1 ⇒ no clip (whole object)
+   */
+  setCut(axis, frac) {
+    this.cutAxis = axis;
+    this.cutFrac = frac;
+    if (this.extent) {
+      const [lo, hi] = this.extent[axis];
+      const pos = lo + frac * (hi - lo);
+      const n = { x: [-1, 0, 0], y: [0, -1, 0], z: [0, 0, -1] }[axis];
+      this.clipPlane.normal.set(...n); // keep coordinate <= pos (far side clipped)
+      this.clipPlane.constant = frac >= 1 ? 1e6 : pos;
     }
-    const kCell = Math.min(kNode, nz - 1);
+    this._rebuildField();
+    this.render();
+  }
 
-    // texture resolution: square-ish texels, capped so a scrub tick stays cheap
+  /** World position of the cut along its normal axis. */
+  _cutCoord() {
+    const [lo, hi] = this.extent[this.cutAxis];
+    return lo + this.cutFrac * (hi - lo);
+  }
+
+  /** Right-handed basis (Matrix4) orienting the textured quad: local X→in-plane
+   *  axis a, local Y→axis b, local Z→plane normal. a,b match slice.planeAxes. */
+  _planeBasis(axis) {
+    const X = new THREE.Vector3(1, 0, 0);
+    const Y = new THREE.Vector3(0, 1, 0);
+    const Z = new THREE.Vector3(0, 0, 1);
+    const m = new THREE.Matrix4();
+    if (axis === 'z') m.makeBasis(X, Y, Z);            // a=x, b=y, n=+z
+    else if (axis === 'x') m.makeBasis(Y, Z, X);        // a=y, b=z, n=+x
+    else m.makeBasis(X, Z, Y.clone().negate());         // a=x, b=z, n=−y (right-handed)
+    return m;
+  }
+
+  /** (Re)build the cut-plane texture + arrows from the stored field at the cut. */
+  _rebuildField() {
+    if (!this._model || !this._fieldData || !this._fieldData.field) return;
+    const { grid, painted, materials } = this._model;
+    const { kind, field, range, cm, fluxQ } = this._fieldData;
+    const axis = this.cutAxis;
+    const axisN = AXIS_N[axis];
+    const [pa, pb] = planeAxes(axis);
+    const COORD = [grid.xs, grid.ys, grid.zs];
+    const NC = [grid.nx, grid.ny, grid.nz];
+    const aMin = COORD[pa][0];
+    const bMin = COORD[pb][0];
+    const spanA = COORD[pa][NC[pa]] - aMin;
+    const spanB = COORD[pb][NC[pb]] - bMin;
+    const coord = this._cutCoord();
+
+    // texel grid: square-ish, capped so a scrub tick stays cheap (G4.1)
     const MAX = 256;
-    const aspect = spanX / spanY;
+    const aspect = spanA / spanB;
     const texW = Math.max(8, Math.round(aspect >= 1 ? MAX : MAX * aspect));
     const texH = Math.max(8, Math.round(aspect >= 1 ? MAX / aspect : MAX));
-    const key = `${nx}x${ny}x${nz}@${kNode}:${texW}x${texH}:${spanX},${spanY}`;
+    const key = `${axis}:${grid.nx}x${grid.ny}x${grid.nz}:${texW}x${texH}`;
 
     if (!this.field || this.field.key !== key) {
       this._disposeField();
       const data = new Uint8Array(texW * texH * 4);
       const texture = new THREE.DataTexture(data, texW, texH, THREE.RGBAFormat);
-      texture.flipY = false;        // row 0 = bottom (y = ymin) ↔ plane v = 0
-      texture.colorSpace = THREE.SRGBColorSpace; // colormap bytes are display sRGB
+      texture.flipY = false;        // row 0 = b minimum ↔ plane local-Y = 0
+      texture.colorSpace = THREE.SRGBColorSpace;
       texture.magFilter = THREE.NearestFilter;
       texture.minFilter = THREE.NearestFilter;
       texture.generateMipmaps = false;
-      const geom = new THREE.PlaneGeometry(spanX, spanY);
+      const geom = new THREE.PlaneGeometry(spanA, spanB);
       const mat = new THREE.MeshBasicMaterial({
         map: texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
-        depthTest: false, // overlay the field on the model from any orbit angle
+        depthTest: true, // embedded in the cut — occluded by geometry on the kept side
+        polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
       });
       const mesh = new THREE.Mesh(geom, mat);
-      mesh.position.set(xmin + spanX / 2, ymin + spanY / 2, zCoord);
-      mesh.renderOrder = 10; // drawn after the voxels
+      mesh.matrixAutoUpdate = false;
+      mesh.renderOrder = 10;
       this.scene.add(mesh);
-      this.field = { mesh, texture, data, texW, texH, key, mirrors: null };
-    } else {
-      this.field.mesh.position.z = zCoord;
+      this.field = { mesh, texture, data, texW, texH, key, mirrors: null, arrowGroup: null };
     }
-    // mirror the field plane onto the symmetry copies (shares geometry + texture,
-    // so the breathing field updates on every copy from the one texture refill)
-    this._updateFieldMirrors(xmin + spanX / 2, ymin + spanY / 2, zCoord);
 
-    // per-texel: void → transparent; solid → bilinear field sample + colormap
-    const { data, texW: tw, texH: th } = this.field;
+    // orient + position the quad at the cut
+    const pos = new THREE.Vector3();
+    pos.setComponent(pa, aMin + spanA / 2);
+    pos.setComponent(pb, bMin + spanB / 2);
+    pos.setComponent(axisN, coord);
+    const baseMatrix = this._planeBasis(axis).setPosition(pos);
+    this.field.mesh.matrix.copy(baseMatrix);
+    this.field.baseMatrix = baseMatrix;
+
+    // fill the texture from the sampled plane + colormap
+    const vals = sampleField({ kind, field, grid, painted, materials, axis, coord, resA: texW, resB: texH });
+    const { data } = this.field;
     const [lo, hi] = range;
     const inv = hi > lo ? 1 / (hi - lo) : 0;
-    const colCell = new Int32Array(tw);
-    for (let c = 0, i = 0; c < tw; c++) {
-      const x = xmin + ((c + 0.5) / tw) * spanX;
-      while (i < nx - 1 && x > xs[i + 1]) i++;
-      while (i > 0 && x < xs[i]) i--;
-      colCell[c] = i;
-    }
-    for (let r = 0; r < th; r++) {
-      const y = ymin + ((r + 0.5) / th) * spanY;
-      let j = 0;
-      while (j < ny - 1 && y > ys[j + 1]) j++;
-      const ty = (y - ys[j]) / (ys[j + 1] - ys[j]);
-      for (let c = 0; c < tw; c++) {
-        const i = colCell[c];
-        const o = 4 * (r * tw + c);
-        if (!materials[painted.matIds[painted.cells[cellIndex(grid, i, j, kCell)]]]) {
-          data[o + 3] = 0; // void — transparent
-          continue;
-        }
-        const x = xmin + ((c + 0.5) / tw) * spanX;
-        const tx = (x - xs[i]) / (xs[i + 1] - xs[i]);
-        const v00 = T[nodeIndex(grid, i, j, kNode)];
-        const v10 = T[nodeIndex(grid, i + 1, j, kNode)];
-        const v01 = T[nodeIndex(grid, i, j + 1, kNode)];
-        const v11 = T[nodeIndex(grid, i + 1, j + 1, kNode)];
-        const v = (1 - ty) * ((1 - tx) * v00 + tx * v10) + ty * ((1 - tx) * v01 + tx * v11);
-        if (!Number.isFinite(v)) { data[o + 3] = 0; continue; } // masked → voxel shows through
-        const [cr, cg, cb] = cm((v - lo) * inv);
-        data[o] = cr; data[o + 1] = cg; data[o + 2] = cb; data[o + 3] = 255;
-      }
+    for (let i = 0; i < vals.length; i++) {
+      const o = 4 * i;
+      const v = vals[i];
+      if (!Number.isFinite(v)) { data[o + 3] = 0; continue; } // void / masked → transparent
+      const [cr, cg, cb] = cm((v - lo) * inv);
+      data[o] = cr; data[o + 1] = cg; data[o + 2] = cb; data[o + 3] = 255;
     }
     this.field.texture.needsUpdate = true;
-    this.render();
+
+    this._rebuildArrows(grid, fluxQ, kind, range, axis, pa, pb, axisN, coord, NC, COORD);
+    this._updateFieldMirrors();
+  }
+
+  /** Flux arrows on the cut: in-plane line segments built from `fluxGlyphs(axis)`. */
+  _rebuildArrows(grid, fluxQ, kind, range, axis, pa, pb, axisN, coord, NC, COORD) {
+    if (this.field.arrowGroup) { this.scene.remove(this.field.arrowGroup); this._disposeArrowGroup(); }
+    if (!(this.arrows && kind === 'cell' && fluxQ)) { this.field.arrowGroup = null; return; }
+
+    const { kCell } = nearestLayers(grid, axis, coord);
+    const stride = Math.max(1, Math.round(Math.max(NC[pa], NC[pb]) / 14));
+    const sc = range[1] > 0 ? range[1] : undefined;
+    const { glyphs } = fluxGlyphs(fluxQ, grid, kCell, { axis, stride, scale: sc });
+    if (!glyphs.length) { this.field.arrowGroup = null; return; }
+    const MIN_LEN = 0.07; // skip near-zero-flux cells so arrows aren't dot-noise
+
+    const meanCell = Math.min(
+      (COORD[pa][NC[pa]] - COORD[pa][0]) / NC[pa],
+      (COORD[pb][NC[pb]] - COORD[pb][0]) / NC[pb],
+    );
+    const L = 0.45 * stride * meanCell; // longest arrow, metres
+    const verts = [];
+    const set = (arr, a, b) => { // push a point with in-plane (a,b) at the cut depth
+      const p = [0, 0, 0]; p[pa] = a; p[pb] = b; p[axisN] = coord; arr.push(p[0], p[1], p[2]);
+    };
+    for (const g of glyphs) {
+      if (g.len < MIN_LEN) continue;
+      const l = g.len * L;
+      const ha = g.a + g.ua * l / 2; const hb = g.b + g.ub * l / 2; // head
+      const ta = g.a - g.ua * l / 2; const tb = g.b - g.ub * l / 2; // tail
+      set(verts, ta, tb); set(verts, ha, hb);
+      // two arrowhead barbs (rotate −dir by ±0.5 rad in-plane)
+      const hl = 0.4 * l;
+      for (const s of [0.5, -0.5]) {
+        const c = Math.cos(s); const sn = Math.sin(s);
+        const ba = -(g.ua * c - g.ub * sn); const bb = -(g.ua * sn + g.ub * c);
+        set(verts, ha, hb); set(verts, ha + ba * hl, hb + bb * hl);
+      }
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    const mat = new THREE.LineBasicMaterial({ color: 0xf4f6fa, transparent: true, opacity: 0.92, depthTest: true });
+    const lines = new THREE.LineSegments(geom, mat);
+    lines.renderOrder = 11;
+    const group = new THREE.Group();
+    group.add(lines);
+    this.scene.add(group);
+    this.field.arrowGroup = group;
   }
 
   /**
-   * Position the field-plane mirror clones to match the symmetry copies. Clones
-   * share the base mesh's geometry + material (+ texture), so the per-tick
-   * texture refill paints all of them; only their matrices need updating. Each
-   * clone's world transform is the reflection R composed with the base plane's
-   * translation, so the field lands on the correct mirrored slice.
+   * Mirror the cut plane (and arrows) onto the symmetry copies for the full-model
+   * view. Each clone's transform is the reflection R composed with the base
+   * plane transform, so the field + arrows land on the correct mirrored slice.
    */
-  _updateFieldMirrors(cx, cy, zCoord) {
+  _updateFieldMirrors() {
     if (!this.field) return;
-    const mirrors = this.mirrorTransforms.slice(1); // [0] is the identity = base mesh
-    if (!this.field.mirrors || this.field.mirrors.length !== mirrors.length) {
-      if (this.field.mirrors) for (const c of this.field.mirrors) this.scene.remove(c);
-      this.field.mirrors = mirrors.map(() => {
-        const c = this.field.mesh.clone(); // shares geometry + material + texture
-        c.matrixAutoUpdate = false;
-        c.renderOrder = 10;
-        this.scene.add(c);
-        return c;
-      });
-    }
-    const base = new THREE.Matrix4().makeTranslation(cx, cy, zCoord);
+    const mirrors = this.mirrorTransforms.slice(1); // [0] = identity (the base)
+    if (this.field.mirrors) for (const c of this.field.mirrors) this.scene.remove(c);
     const R = new THREE.Matrix4();
-    for (let i = 0; i < mirrors.length; i++) {
-      R.makeScale(...mirrors[i].scale).setPosition(...mirrors[i].offset);
-      this.field.mirrors[i].matrix.copy(R).multiply(base);
-    }
+    this.field.mirrors = mirrors.map((mt) => {
+      const grp = new THREE.Group();
+      grp.matrixAutoUpdate = false;
+      R.makeScale(...mt.scale).setPosition(...mt.offset);
+      // plane clone (shares geometry + material + texture → one refill paints all)
+      const planeClone = this.field.mesh.clone();
+      planeClone.matrixAutoUpdate = false;
+      planeClone.matrix.copy(this.field.baseMatrix);
+      grp.add(planeClone);
+      if (this.field.arrowGroup) grp.add(this.field.arrowGroup.children[0].clone());
+      grp.matrix.copy(R);
+      this.scene.add(grp);
+      return grp;
+    });
   }
 
-  /** Remove the in-scene field plane (e.g. on geometry change before a re-solve). */
+  /** Remove the in-scene cut plane (e.g. on geometry change before a re-solve). */
   clearFieldSlice() {
     this._disposeField();
     this.render();
   }
 
+  _disposeArrowGroup() {
+    if (!this.field || !this.field.arrowGroup) return;
+    this.field.arrowGroup.traverse((o) => {
+      if (o.isLine) { o.geometry.dispose(); o.material.dispose(); }
+    });
+  }
+
   _disposeField() {
     if (!this.field) return;
     if (this.field.mirrors) for (const c of this.field.mirrors) this.scene.remove(c);
+    if (this.field.arrowGroup) { this.scene.remove(this.field.arrowGroup); this._disposeArrowGroup(); }
     this.scene.remove(this.field.mesh);
     this.field.mesh.geometry.dispose();
     this.field.mesh.material.dispose();
     this.field.texture.dispose();
     this.field = null;
-  }
-
-  /**
-   * Clip away everything beyond `frac` of the domain along `axis`.
-   * @param {'x'|'y'|'z'} axis
-   * @param {number} frac — 0..1 of the domain extent; 1 shows everything
-   */
-  setClip(axis, frac) {
-    const [lo, hi] = this.extent[axis];
-    const pos = lo + frac * (hi - lo);
-    const n = { x: [-1, 0, 0], y: [0, -1, 0], z: [0, 0, -1] }[axis];
-    this.clipPlane.normal.set(...n);
-    // keep points with normal·p + constant >= 0, i.e. coordinate <= pos
-    this.clipPlane.constant = frac >= 1 ? 1e6 : pos;
-    this.render();
   }
 }

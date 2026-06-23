@@ -105,6 +105,23 @@ sequenced, gated plan; this file is the unsorted pool it draws from.
   (colormap + arrows) on the embedded cut face; `src/slice.mjs` + axis-general
   `fluxGlyphs`; unified Cut axis/position control. Kept for the record; any
   further field-mode-presentation / panel-layout polish folds into S2-M4 (UI).
+- 2026-06-23 — **Heat-flow arrows: too small + can't separate components** (Operator,
+  after the 3D cut rework). (1) The 3D flux arrows render far too short — bump the
+  arrow length scale in `viz3d._rebuildArrows` (the `L` / `MIN_LEN` tuning) and
+  likely add a size/density control; cheap. (2) Let the user display the
+  **stationary (steady) vs harmonic components separately** — partly there
+  (amplitude = |T̂|, swing = AC-only) but no explicit "steady only" mode and the
+  flux is the instantaneous superposition; add a steady-only flux/field view +
+  clearer labelling. Small–medium; folds into S2-M4 (UI) or the general-tool work.
+- 2026-06-23 — **Auto-ψ / L2D from picked surfaces** (Operator; high value). Today
+  ψ needs a hardcoded `psiSpec` (lengths, Lz, layers) per preset (`model.mjs` +
+  `worker.steadyReadouts`). Instead: the user picks the warm (interior) surface →
+  Φ = `regionFlux` over it (machinery exists) → L2D = Φ/(ΔT·L). Then
+  ψ = L2D − Σ Uⱼ·lⱼ needs the flanking 1D U-values: semi-automatic (user marks the
+  flank reference sections, lengths auto-measured in the external-dim convention,
+  per CLAUDE.md M1) is ~2–3 sessions and removes the hardcoded `psiSpec`. Reuses
+  the click-a-face BC machinery (DESIGN M5 / S2-M3). Fully-automatic flank
+  detection is fuzzier — don't chase first. → promote into the general-tool track.
 - 2026-06-12 — Watch: orbit-rotate occasionally stalled with a `not-allowed`
   cursor. Applied preventive CSS (`user-select:none` on #view, `touch-action:none`
   + `-webkit-user-drag:none` on the canvas). If it resurfaces, suspect a

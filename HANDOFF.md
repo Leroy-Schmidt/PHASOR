@@ -1,117 +1,62 @@
-# PHASOR — session kickoff: S2-M1.5 part 2 (comparison panel + steady pinning)
+# PHASOR — session kickoff: S2-M1 closed; next is perf (S2-M2) or the general-tool track
 
-Read `ROADMAP.md` (Stage-2 plan, priority layer above BACKLOG), CLAUDE.md,
-VALIDATION.md (tail), and `git log --oneline -8`. **Stage 1 (M0–M5) is sealed.**
-Stage 2 keeps Operator involvement low: gate headlessly, sign pre-built proofs.
+Read `ROADMAP.md` (Stage-2 plan + the new **general-tool vision** section),
+CLAUDE.md, VALIDATION.md (tail), and `git log --oneline -10`. **Stage 1 (M0–M5)
+is sealed.** Stage 2 keeps Operator involvement low: gate headlessly, sign
+pre-built proofs.
 
-## ⚠ Read first — M1.5 part 1 is DONE; two things gate part 2
-- **S2-M1.5 part 1 committed (`12eb0a9`):** `src/standards.mjs` (13370 + 12831
-  closed forms) + the **S2-G1.5 calibration gate** (`node --test` 115/115).
-  Finding: DIN EN ISO 13370:2018 has **no worked numeric example** (companion
-  ISO/TR docs hold those), so the gate anchors on the standard's published
-  **Table H.1** δ (2.2/3.2/4.2 m, reproduced from Table 7 via Eq H.1) + the
-  z=0→slab reduction identity — non-circular. That's the rigorous core banked.
-- **Operator flagged the VIEW needs rework** (2026-06-22, details pending —
-  BACKLOG). Part 2 adds a *comparison view*, so **coordinate with that rework**
-  before investing in a polished comparison panel — or you'll redo it.
-- **The 13370-vs-PHASOR comparison is real modeling, not a readout.** Worked it
-  out for `basement` (2D strip: B'=full width 4 m, z=2.5 m, bare concrete, soil
-  λ=2.0=Table7 sand/gravel): **13370 ≈ 36.5 W/m vs PHASOR ≈ 49.9 W/m (ratio
-  0.73, ~27 % gap).** Same order + sign, but loose — reconciling it **is** the
-  steady-baseline-pinning task (decision 2): PHASOR's finite domain + deep-
-  Dirichlet sink + surface-driven BC measure a subtly different thing than
-  13370's equivalent-thickness idealization. Expect a "compare, investigate,
-  ±human-judgment" outcome (G3.3 spirit), not a tight auto gate.
+## State you're inheriting (S2-M1 substantially complete, 2026-06-23)
+- **S2-M1 done** (committed on `main`): M1.1 flux field · M1.2 heat-flow viz +
+  `tools/proof.mjs` · M1.3 harmonic-only swing · M1.4 annual loss curve (earth vs
+  air) · **M1.5 part 1** `src/standards.mjs` + 13370 calibration gate · **M1.6**
+  export seam · plus the **3D cutting-plane view rework**.
+- `node --test`: **124/124.** `MIN_TESTS` 124. Recent commits: view rework
+  `5879777`, standards `12eb0a9`, loss curve `6ed9943`.
+- **Not pushed/tagged.** Operator pushes `main` + tags **`s2-m1-pass`** after the
+  S2-H1.2 proof-sheet glance (sheets: `proofs/s2-m1.{2,3,4}/`).
 
-## State you're inheriting (S2-M1.4 done, 2026-06-22)
-- **S2-M1.2/M1.3/M1.4 done** (committed): heat-flow viz + `tools/proof.mjs`;
-  harmonic-swing view; **annual heat-loss curve (earth vs air)**.
-- **S2-M1.4 deliverables:**
-  - `src/losscurve.mjs` (pure, DOM-free): `regionFluxReal`, `regionFluxPhasor`,
-    `lossCurveSamples`, `lossAt` — the envelope-loss integral by superposition
-    over flux.mjs. Gates **S2-G1.4a** (reconstruction == direct, rel < 1e-7) /
-    **S2-G1.4b** (air mean loss > earth) in `test/losscurve.test.mjs`.
-  - New preset **`basement_air`** (`model.mjs`): the same cellar standing in air
-    (soil removed, outer faces on the air film). Same interior area as `basement`
-    → fair comparison.
-  - `worker.mjs` ships `loss:{earth,air}` (region-flux phasors; air only for
-    `basement`, via `computeLoss`) — computed **before** the Tre/Tim buffers are
-    transferred. New 3rd panel `src/lossview.mjs` (`LossView`) — earth-vs-air with
-    the gap shaded; on `window.__phasor.loss`.
-  - **Headline numbers:** earth mean loss **9.98 W**, air **40.85 W** →
-    **earth/air = 0.24** (soil cuts annual-mean loss to 24 %); earth annual swing
-    5.7 W vs air 37 W (soil damps); curves cross in summer (the ~2-month lag).
-- `node --test`: **112/112**. `MIN_TESTS` 112. Proof sheets: `proofs/s2-m1.2/`,
-  `proofs/s2-m1.3/`, `proofs/s2-m1.4/`.
-- **Not pushed/tagged.** Last commit (M1.4) is HEAD on `main` (`git push` blocked
-  for the agent — Operator pushes/tags). **S2-H1.2 (human) reserved:** Operator
-  glances at the three proof sheets + the live 3D view (ROADMAP touchpoint 2).
+## ⚠ Parked (Operator decisions — don't silently revive)
+- **M1.5 part 2: 13370-vs-PHASOR comparison panel + steady-baseline pinning.**
+  Parked 2026-06-23. The loose cross-method bit (13370 ≈ 36.5 vs PHASOR ≈ 49.9 W/m,
+  ratio 0.73; the gap *is* the steady pinning task — deepen the deep-Dirichlet
+  boundary / ISO-13370 correction). `standards.mjs` + the calibration gate already
+  exist; this is the comparison *view* + the pinning. Best done on the reworked 3D.
+- **Viz polish (BACKLOG 2026-06-23):** 3D flux arrows too small (bump
+  `viz3d._rebuildArrows` `L`/`MIN_LEN` + a size control); steady-vs-component
+  separation (a "steady only" field/flux view). Folds into S2-M4 / general-tool.
 
-## Decisions LOCKED for M1.5 (Operator, 2026-06-22 — ROADMAP touchpoint 3)
-1. **Standards code lives in PHASOR:** a pure `src/standards.mjs` (13370/12831
-   closed forms), so the annex calibration gate runs under `node --test`. **IP
-   bright line:** norm PDFs / full tables stay gitignored (`norms/`) — only the
-   formulas and the single worked annex example go in code (cf. Trittschall
-   `references.js` / `verify.js`).
-2. **Pin down the steady baseline** (the higher-effort path, chosen deliberately):
-   get a *converged* steady ground-loss U to compare against 13370, by deepening
-   the deep-Dirichlet boundary substantially **or** applying the ISO-13370
-   characteristic-dimension / periodic-depth correction. Compare **both** steady
-   and periodic against the standard. This is the session's main risk (ROADMAP
-   ~0.6) — and it interacts with perf: a much deeper domain = bigger grid =
-   slower solve (mind G2.5 / the 5 s budget). Consider a **dedicated coarse
-   calibration solve** (deep + cheap) separate from the interactive display solve,
-   rather than deepening every preset. Validate convergence: the steady U should
-   stop moving as you deepen further (the opposite of the ~2.5 %/doubling drift
-   that motivated this).
-
-## Your job this session: S2-M1.5 part 2 — comparison + steady pinning
-The calibration gate (part 1) is done. What remains is the side-by-side
-comparison + reconciling the steady gap. **The standards math + the gate already
-exist** in `src/standards.mjs` / `test/standards.test.mjs` — reuse them.
-- **Steady pinning (decision 2) FIRST — it's the gating modeling work.** Pin a
-  *converged* PHASOR steady basement loss (deepen the deep-Dirichlet boundary, or
-  apply the ISO-13370 correction) and reconcile the 0.73 ratio above. Confirm
-  convergence: the steady loss stops drifting as you deepen (vs the ~2.5 %/
-  doubling baseline). Mind perf (deeper = bigger grid; G2.5 / 5 s budget) — a
-  **dedicated coarse-but-deep calibration solve** separate from the display solve
-  is the likely move. Be honest if it stays loose: a cross-method ±human call
-  (G3.3 spirit), not a tight auto gate.
-- **Comparison view** — PHASOR earth / air / 13370 / 12831 side by side; reduction
-  factor earth÷air **computed** (M1.4 gives 0.24). **Hold for the view rework** —
-  fold it into whatever the Operator decides for the viz, rather than building a
-  standalone panel that gets redone. A text readout is a safe interim.
-- **Proof:** `tools/proof.mjs` → `proofs/s2-m1.5/`; batch the human glance with S2-H1.2.
-- 12831 design (max) load is a one-liner via `standards.designHeatLoad(H, θi, θe)`.
-
-## Driving the proof harness (learned across M1.2–1.4)
-- Drive `window.__phasor` = `{ viz, slices, probe, loss, loadPreset, solve, ui }`;
-  settle with `slices.mean != null && /^solved/.test(#status)`.
-- **Read canvas pixels after a 2× `requestAnimationFrame` wait** (else `getImageData`
-  sees an unpainted canvas, n=0). **Count `alpha > 0`, not `== 255`** — line-art
-  panels (probe / loss) draw semi-transparent strokes over a transparent canvas.
-- PNG dataURL exceeds the inline limit → dump via `+'!!!PAD!!!'+'A'.repeat(120000)`
-  to force a tool-results file; decode in node (no `python` on PATH).
-- Open the target panel's `<details>` (and collapse the others) before capturing —
-  the loss panel is collapsed by default.
-
-## ⚠ Still-open: the G2.5 wall-clock flake
-G2.5 (48³ COCG < 10 s) flakes at its boundary under load and can trip the
-pre-commit hook. **Not a regression.** Run guardrails in the **foreground** on a
-quiet machine (stop the preview server first; never run the suite in the
-background — it gets starved, seen at 525 s once). Don't touch the budget without
-Operator sign-off. Real fix = S2-M2 (perf, pure-JS preconditioner first).
+## Two candidate next directions (Operator's call)
+The Operator asked how far to a **general-purpose axis-aligned f_Rsi/ψ tool** — see
+ROADMAP "The general-tool vision". Key finding: **the engine is already there**
+(f_Rsi is geometry-agnostic; the solver does arbitrary axis-aligned boxes). The
+gap is authoring + ψ-automation + trust, not physics. Likely next:
+1. **S2-M2 Performance** — the Operator is straining on `basement3d` (quarter-
+   symmetry, ~287-iter steady ground solve) and wants 5–10×. **Preconditioner-
+   first / pure-JS-first** (multigrid V-cycle in `solver.mjs` via a `precond(r,z)`
+   hook; Jacobi-CG stays the certified fallback) — the iteration-bound steady solve
+   is the bottleneck, so a preconditioner is the bigger, **buildless**, safer lever
+   than WebGPU/WASM (which is the second lever, *with profiling numbers first*).
+   Gates G-A…G-P in ROADMAP; `tools/perf.mjs` measures isolated (never in
+   `node --test`). Prereq for interactive 3D details.
+2. **General-tool authoring (S2-M3)** — define constructions without editing
+   `model.mjs`: JSON load/validate (cheap; presets *are* the JSON) → 2D
+   cross-section editor + click-a-face BC assignment (the fiddly part) → **auto-ψ**
+   from picked surfaces (BACKLOG; removes hardcoded `psiSpec`) → material editor →
+   trust guardrails (grid-convergence + flux-balance + staircasing warning).
 
 ## Standing rules
 - Gates before features; tolerances are law; raise `MIN_TESTS` when adding gates.
+  Run `node tools/guardrails.mjs` before claiming green / committing (pre-commit
+  hook). **Never** set `GUARDRAILS_ALLOW_TOL_CHANGE` without Operator sign-off this
+  session (one rename override was authorized 2026-06-23 for the view rework).
 - One subgoal per session, `node --test` + guardrails green + commit between.
-- 2D = agent-verifiable (canvas pixels via proof.mjs); 3D WebGL = human channel.
-- Scope watch: one gentle flag for out-of-scope / sloped / later-milestone work,
-  then respect the choice; park in BACKLOG.md.
-- Windows: node on PATH (no `python`); `git push origin main` blocked for the agent.
-
-## After M1.5: S2-M1.6 — export (Explainer seam)
-Versioned JSON/CSV of the computed numbers (readouts + loss curve + comparison).
-Gate S2-G1.6: schema validates; round-trip lossless; matches in-app readouts.
-Reuse `downloadBlob`/`exportText` (index.html) + the `lineProbeCSV` pattern. Then
-all of S2-M1 is green → tag `s2-m1-pass` (Operator) after the S2-H1.2 glance.
+- **G2.5 wall-clock flake** (48³ < 10 s) trips the hook under load — not a
+  regression; run guardrails in the **foreground** on a quiet machine, retry; never
+  run the suite in the background (it gets starved, seen at 525 s). The real fix is
+  S2-M2.
+- 2D = agent-verifiable (canvas pixels via proof.mjs); **3D WebGL = human channel**
+  — but you can `toDataURL` the renderer canvas (preserveDrawingBuffer) + decode in
+  node to eyeball it yourself (used in the view rework).
+- Windows: node on PATH; `pdftotext` is at `/mingw64/bin` (norm PDFs in `norms/`,
+  gitignored — IP); no `python` (use node for base64/decode). `git push origin main`
+  blocked for the agent — Operator pushes/tags.

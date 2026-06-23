@@ -94,7 +94,8 @@
 
 <script type="module">
 import { buildGrid, paintBoxes, cellIndex } from './src/grid.mjs';
-import { MATERIALS, presets, layersWithInsulation } from './src/model.mjs';
+import { MATERIALS, presets, layersWithInsulation, CLIMATE } from './src/model.mjs';
+import { buildExport, readoutsCSV } from './src/export.mjs';
 import { Viz3D } from './src/viz3d.mjs';
 import { SlicePanel } from './src/viz2d.mjs';
 import { LineProbe } from './src/lineprobe.mjs';
@@ -194,10 +195,30 @@ addExportBtn(viewActions, '⤓ PNG', 'Download the 3D view as PNG',
 
 const readoutsWrap = document.createElement('div');
 readoutsWrap.id = 'readouts-wrap';
+const readoutsActions = document.createElement('span');
+readoutsActions.className = 'export-actions';
+readoutsActions.style.cssText = 'float:right; display:inline-flex; gap:6px';
 const readouts = document.createElement('div');
 readouts.id = 'readouts';
-readoutsWrap.appendChild(readouts);
+readoutsWrap.append(readoutsActions, readouts);
 slicesEl.appendChild(readoutsWrap);
+
+// M1.6 — export the computed numbers (the Explainer seam). Versioned JSON + a
+// flat readouts CSV, built from the last solve result via src/export.mjs.
+let lastResult = null; // { readouts, loss, stats }
+const makeExport = () => buildExport({
+  preset: current?.name, params: current?.params,
+  climate: { interior: CLIMATE.internal.T, exterior: CLIMATE.external.T },
+  readouts: lastResult.readouts, loss: lastResult.loss, stats: lastResult.stats,
+});
+addExportBtn(readoutsActions, '⤓ JSON', 'Export the computed numbers as versioned JSON', () => {
+  if (lastResult) exportText(JSON.stringify(makeExport(), null, 2), `${stamp()}-phasor.json`, 'application/json');
+  else status.textContent = 'Export — solve first';
+});
+addExportBtn(readoutsActions, '⤓ CSV', 'Export the headline readouts as CSV', () => {
+  if (lastResult) exportText(readoutsCSV(makeExport()), `${stamp()}-readouts.csv`);
+  else status.textContent = 'Export — solve first';
+});
 
 // --- time scrubber (signature instrument): sweeps a day or a year while the
 // field breathes. Pure phasor evaluation in the panel — never a re-solve.
@@ -306,6 +327,7 @@ function solve() {
 
 function invalidate(message) {
   seq++; // any in-flight result is now stale
+  lastResult = null;
   slices.clearField(message);
   probe.clear();
   loss.clear();
@@ -334,6 +356,7 @@ worker.onmessage = (e) => {
     probe.setFreq(OMEGA[ui.freq]);
     loss.setLoss(m.loss);
     applyScrub();
+    lastResult = { readouts: m.readouts, loss: m.loss, stats: m.stats };
     renderReadouts(m.readouts);
     const hi = m.harmonics.map((h) => `${h.f} ${h.iterations} it`).join(', ');
     status.textContent = `solved — ${m.stats.cells} cells, mean CG ${m.stats.iterations} it; ` +

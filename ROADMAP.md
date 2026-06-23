@@ -248,6 +248,54 @@ genuine value-add (the corner is what a 1D/2D formula structurally cannot find).
 
 ---
 
+## The general-tool vision — "author any axis-aligned detail, get f_Rsi/ψ"
+
+Synthesis of the Operator's 2026-06-23 question: how far from a more-or-less
+general-purpose thermal-bridge tool (window + slab-over, offset basement, floor
+slab into brick walls with external EPS, …)? **Key finding: the engine is already
+there.** f_Rsi is fully geometry-agnostic (`worker.steadyReadouts` runs the
+R_si=0.25 solve + interior-surface min for *any* preset with an `interior` Robin
+region); the solver handles arbitrary axis-aligned multi-material boxes, steady +
+harmonic, O(h²)-gated. The gap to "general-purpose" is **authoring + ψ-automation +
+trust**, not physics or solver work. The Operator's example details are all
+orthogonal → squarely inside the trusted envelope (no staircasing).
+
+Sequenced gap (rough effort in vibe-sessions; estimates soft, UX is the uncertain
+part). Order: each lands green + committed so stopping partway degrades gracefully.
+
+1. **Authoring — the dominant cost (this is S2-M3, promoted in importance).**
+   Define a construction without editing `model.mjs`. The data model already
+   exists (presets *are* boxes+materials+BCs JSON), so JSON load/validate is ~1
+   session; the lift is an **interactive 2D cross-section editor** (draw rects,
+   extrude) + **click-a-face BC assignment** ("indoors 20 °C / outdoors / adiabatic
+   / ground") — the fiddly, ~0.7-odds part. 2D-cross-section-first covers the bulk
+   of ψ work for far less than a full 3D modeller. ~4–6 sessions.
+2. **Auto-ψ / L2D from picked surfaces** (BACKLOG 2026-06-23; standout value).
+   Pick the interior surface → Φ via `regionFlux` → L2D; semi-automatic flank
+   U-values → ψ. Removes the hardcoded `psiSpec`. Reuses the face-pick machinery
+   from (1). ~2–3 sessions.
+3. **Material editor** — add/edit λ,ρ,c. Data model trivial; UI only. ~1 session.
+4. **Trust guardrails** — authored models shift risk from solver bugs (gated) to
+   *user* error: grid-convergence check, BC/flux-balance sanity readout, the
+   staircasing warning surfaced on non-orthogonal geometry. This is what makes it
+   *relied-upon*, not just *capable*. ~1–2 sessions.
+5. **Perf (S2-M2)** — needed for interactive **3D** details (the real moat: a 3D
+   corner f_Rsi that 2D catalogues structurally can't find). The basement3d strain
+   is the **iteration-bound** steady ground solve (~287 CG it) → a **multigrid
+   preconditioner (pure JS, buildless) is the bigger, safer 5–10× lever**;
+   WebGPU/WASM matvec is the second lever, *with profiling numbers first* (ROADMAP
+   S2-M2 is profile-first / pure-JS-first by design). Not needed for 2D work.
+
+**Bottom line:** ~8–12 sessions to a usable general **2D** ψ/f_Rsi tool; +perf for
+interactive 3D corners. Caveats stay: sloped/curved out (staircasing — needs the
+2D-triangle v0.2 upgrade, OPERATOR_NOTES §2); 3D point bridges (χ) not modelled (2D
+ψ + 3D-corner f_Rsi cover most catalogue work); going "general" is a deliberate
+scope step up from "validated demo of specific details" (hence the guardrails item).
+Also fold in the small polish (BACKLOG 2026-06-23): bigger flux arrows + a
+steady-only / component-separated field view.
+
+---
+
 ## Parallel track T1 — Norm-Explainer app (SEPARATE repo)
 
 Not a PHASOR milestone — different quality model (human-reviewed content vs. gated
@@ -262,8 +310,11 @@ normal grey zone; bright line is don't publish PDFs / full tables on the open we
 Acoustics fork (2026-06-19); mesh-quality corner-diagonal grading (2026-06-12);
 `slab_junction` milder catalogue figure (2026-06-18); orbit-rotate watch.
 
-## Open question (resolve before M1.5)
-Where do the 13370/12831 closed forms live? (a) a pure `src/standards.mjs` inside
-PHASOR so the comparison panel is self-contained and the annex gate runs under
-PHASOR's `node --test`; (b) only in the Explainer app, PHASOR importing via JSON.
-Leaning **(a)** — keeps the calibration gate in PHASOR's harness.
+## Resolved
+- **Where the 13370/12831 closed forms live** (was "before M1.5"): **(a)** — a pure
+  `src/standards.mjs` in PHASOR, annex calibration under `node --test`. Done
+  (M1.5 part 1, `12eb0a9`). Norm PDFs stay gitignored (IP).
+- **M1.5 part 2 (comparison panel + steady-baseline pinning) — PARKED** (Operator,
+  2026-06-23): closed M1 after export with the comparison deferred. It's the loose,
+  cross-method modelling bit (13370 ≈ 36.5 vs PHASOR ≈ 49.9 W/m, ratio 0.73); pick
+  it up when wanted, ideally sitting on the reworked 3D cut + the general-tool work.

@@ -21,6 +21,12 @@ sequenced, gated plan; this file is the unsorted pool it draws from.
   *steady* ground-loss U-value is ever needed (ISO 13370 territory), revisit the
   deep boundary (place it much deeper, or use an ISO-13370 characteristic
   correction). Out of scope for M3.
+  - **Update 2026-06-24** (see VALIDATION.md S2-M1.5 gap NOTE): investigated the
+    13370-vs-PHASOR steady gap. It is **not** the deep boundary — interior loss is
+    flat (3 %) from 9→24 m domain. The gap is **localized to the below-grade WALL**:
+    PHASOR's floor loss matches 13370 Eq 13/14 to ~1 %, but the wall loss runs
+    ~1.65× over 13370 Eq 16 (the cruder closed form). So M1.5-part-2 pinning should
+    target the wall term, not the deep-Dirichlet placement.
 - 2026-06-16 — Basement annual amplitude vs the pure semi-infinite e^{−y/δ}: the
   finite deep Dirichlet (T̂=0) biases the decay ~15 % low even at a fine grid
   (it's physical, not discretization). G3.2 is therefore pinned on the phase

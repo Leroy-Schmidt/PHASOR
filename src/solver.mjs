@@ -16,7 +16,13 @@ function dot(a, b) {
  * @param {object} opts
  * @param {(x: Float64Array, y: Float64Array) => void} opts.apply — y ← A x (overwrites y)
  * @param {Float64Array} opts.b — right-hand side (not mutated)
- * @param {Float64Array} opts.diag — Jacobi preconditioner, diag(A) > 0
+ * @param {Float64Array} opts.diag — Jacobi diagonal, diag(A) > 0; the default
+ *   preconditioner and the certified fallback (required unless `precond` is given)
+ * @param {(r: Float64Array, z: Float64Array) => void} [opts.precond] — apply the
+ *   preconditioner z ← M⁻¹ r (writes into z). Default: Jacobi, z = r / diag,
+ *   which is bit-identical to the un-hooked solver. A stronger M (e.g. the S2-M2
+ *   multigrid V-cycle) overrides it; the operator `apply` is unchanged, so the
+ *   converged solution is identical up to tolerance.
  * @param {Float64Array} [opts.x0] — initial guess (not mutated; default 0)
  * @param {number} [opts.tol=1e-8] — relative residual ‖b−Ax‖/‖b‖ target
  * @param {number} [opts.maxIter=5000]
@@ -31,12 +37,18 @@ export function cg({ apply, b, diag, x0, tol = 1e-8, maxIter = 5000, onProgress 
   const p = new Float64Array(n);
   const Ap = new Float64Array(n);
 
+  // Optional preconditioner hook z ← M⁻¹ r (S2-M2 multigrid V-cycle drops in
+  // here). Read off the opts object so the default Jacobi path — z = r / diag —
+  // stays bit-identical to the un-hooked solver.
+  const precond = arguments[0].precond;
+  const applyPrecond = precond || ((rIn, zOut) => { for (let i = 0; i < n; i++) zOut[i] = rIn[i] / diag[i]; });
+
   apply(x, Ap);
   for (let i = 0; i < n; i++) r[i] = b[i] - Ap[i];
   const bNorm = Math.sqrt(dot(b, b)) || 1;
   let relRes = Math.sqrt(dot(r, r)) / bNorm;
 
-  for (let i = 0; i < n; i++) z[i] = r[i] / diag[i];
+  applyPrecond(r, z);
   let rz = dot(r, z);
   p.set(z);
 
@@ -50,7 +62,7 @@ export function cg({ apply, b, diag, x0, tol = 1e-8, maxIter = 5000, onProgress 
       x[i] += alpha * p[i];
       r[i] -= alpha * Ap[i];
     }
-    for (let i = 0; i < n; i++) z[i] = r[i] / diag[i];
+    applyPrecond(r, z);
     const rzNext = dot(r, z);
     const beta = rzNext / rz;
     rz = rzNext;

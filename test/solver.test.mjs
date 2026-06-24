@@ -75,6 +75,68 @@ test('CG does not mutate b or x0', () => {
 });
 
 // ====================================================================
+// S2-M2 — precond(r,z) seam (ROADMAP S2-M2). The cg preconditioner is now a
+// hook (z ← M⁻¹ r) so the multigrid V-cycle can drop in without touching cg.
+// Gates G-A/G-C flavor: the default must be a behavioral no-op vs the old inline
+// Jacobi, and a custom M must be genuinely wired (changes iterations, still
+// correct). Written WITH the seam, before the V-cycle it underpins.
+// ====================================================================
+
+// SPD tridiagonal with a STRONGLY VARYING diagonal (3..12), so Jacobi and
+// identity preconditioning give measurably different iteration counts.
+const NV = 64;
+function makeVarSystem() {
+  const diag = new Float64Array(NV);
+  for (let i = 0; i < NV; i++) diag[i] = 3 + (i % 10); // strictly diagonally dominant
+  const apply = (x, y) => {
+    for (let i = 0; i < NV; i++) {
+      y[i] = diag[i] * x[i] - (i > 0 ? x[i - 1] : 0) - (i < NV - 1 ? x[i + 1] : 0);
+    }
+  };
+  const xTrue = new Float64Array(NV);
+  for (let i = 0; i < NV; i++) xTrue[i] = Math.sin(0.37 * i) + 0.5;
+  const b = new Float64Array(NV);
+  apply(xTrue, b);
+  return { apply, b, diag, xTrue };
+}
+
+test('S2-G2.A — default precond is bit-identical to explicit Jacobi (no-op seam)', () => {
+  const { apply, b, diag } = makeVarSystem();
+  const def = cg({ apply, b, diag, tol: 1e-12, maxIter: 1000 });
+  const exp = cg({
+    apply, b, diag, tol: 1e-12, maxIter: 1000,
+    precond: (r, z) => { for (let i = 0; i < NV; i++) z[i] = r[i] / diag[i]; },
+  });
+  assert.equal(def.iterations, exp.iterations, 'iteration count must match exactly');
+  assert.deepEqual(Array.from(def.x), Array.from(exp.x), 'solution must be bit-identical');
+});
+
+test('S2-G2.A — a custom preconditioner is actually invoked', () => {
+  const { apply, b, diag, xTrue } = makeVarSystem();
+  let calls = 0;
+  const { x, converged } = cg({
+    apply, b, diag, tol: 1e-12, maxIter: 1000,
+    precond: (r, z) => { calls++; for (let i = 0; i < NV; i++) z[i] = r[i] / diag[i]; },
+  });
+  assert.ok(calls > 0, 'precond hook was never called');
+  assert.ok(converged);
+  let worst = 0;
+  for (let i = 0; i < NV; i++) worst = Math.max(worst, Math.abs(x[i] - xTrue[i]));
+  assert.ok(worst < 1e-9, `solution error ${worst}`);
+});
+
+test('S2-G2.A — identity preconditioner is wired: different iterations, same solution', () => {
+  const { apply, b, diag, xTrue } = makeVarSystem();
+  const jac = cg({ apply, b, diag, tol: 1e-12, maxIter: 1000 });
+  const idn = cg({ apply, b, diag, tol: 1e-12, maxIter: 1000, precond: (r, z) => z.set(r) });
+  assert.ok(idn.converged && jac.converged);
+  assert.notEqual(idn.iterations, jac.iterations, 'identity M must change the iteration count (hook live)');
+  let worst = 0;
+  for (let i = 0; i < NV; i++) worst = Math.max(worst, Math.abs(idn.x[i] - xTrue[i]));
+  assert.ok(worst < 1e-9, `identity-preconditioned solution error ${worst}`);
+});
+
+// ====================================================================
 // M2 — COCG (complex-symmetric) and the dense complex-LU oracle.
 // Written BEFORE the harmonic solver. (DESIGN §3.4)
 // ====================================================================

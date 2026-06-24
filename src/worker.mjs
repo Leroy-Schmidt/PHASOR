@@ -119,8 +119,8 @@ function bcMean(bcs, name) {
  * solve with R_si = 0.25 for f_Rsi (DIN 4108-2 — convention fixed in
  * CLAUDE.md M1). ψ only for presets that declare psiSpec (extruded junctions).
  */
-export function steadyReadouts(presetDef, materials, { tol = 1e-10, maxIter = 20000, onProgress } = {}) {
-  const main = solveSteady(presetDef, materials, { tol, maxIter, onProgress });
+export function steadyReadouts(presetDef, materials, { tol = 1e-10, maxIter = 20000, onProgress, mainSolve } = {}) {
+  const main = mainSolve ?? solveSteady(presetDef, materials, { tol, maxIter, onProgress });
   const flux = boundaryFlux(main.problem, main.T);
 
   const RsiFixed = 0.25;
@@ -191,17 +191,52 @@ export function computeLoss(presetDef, materials, region, { tol = 1e-10 } = {}) 
   return { mean, harmonics };
 }
 
+// --------------------------------------------------------- GPU display solve
+/** Min free-node count below which the GPU's fixed setup cost isn't worth it
+ *  (small presets like corner2d already solve far under budget on the CPU). */
+const GPU_MIN_NODES = 20000;
+
+/**
+ * The display steady solve, GPU-accelerated when worthwhile. Assembles once;
+ * if WebGPU is present AND the problem is large enough, runs the fp32 GPU-resident
+ * CG (tol 1e-5 — ~5 sig figs, past what's physically meaningful). On WebGPU
+ * absence, error, or non-convergence it falls back to the certified fp64 CPU `cg`.
+ * Returns the same shape as `solveSteady` (+ `backend`). Browser/Worker-only path —
+ * node never imports the GPU module (dynamic import, guarded by `navigator.gpu`),
+ * so `webgpu.mjs`'s top-level `GPUBufferUsage` reference never trips `node --test`.
+ */
+async function solveDisplaySteady(presetDef, materials, { tol = 1e-10, maxIter = 20000, onProgress } = {}) {
+  const grid = buildGrid(presetDef.gridSpec);
+  const painted = paintBoxes(grid, presetDef.boxes, presetDef.background);
+  const problem = assemble(grid, painted, materials, presetDef.bcs);
+  if (typeof navigator !== 'undefined' && navigator.gpu && problem.nNodes >= GPU_MIN_NODES) {
+    try {
+      const { gpuSolveSteady } = await import('./gpu/webgpu.mjs');
+      const r = await gpuSolveSteady(problem, { tol: 1e-5 });
+      if (r.converged) {
+        return { grid, painted, problem, T: r.x, iterations: r.iterations, relRes: r.relRes, converged: true, backend: 'gpu' };
+      }
+    } catch { /* WebGPU unavailable or failed → CPU fallback below */ }
+  }
+  const { x: T, iterations, relRes, converged } = cg({
+    apply: (v, out) => applyA(problem, v, out),
+    b: problem.b, diag: problem.diag, x0: problem.x0, tol, maxIter, onProgress,
+  });
+  return { grid, painted, problem, T, iterations, relRes, converged, backend: 'cpu' };
+}
+
 // --------------------------------------------------------- worker wiring
 // `self` exists in a Worker scope but not under plain node (`node --test`).
 if (typeof self !== 'undefined' && typeof window === 'undefined') {
-  self.onmessage = (e) => {
+  self.onmessage = async (e) => {
     const { id, presetName, params, tol } = e.data;
     try {
       const presetDef = presets[presetName](params ?? {});
       const onProgress = (iter, relRes) => {
         if (iter % 25 === 0) self.postMessage({ id, type: 'progress', iter, relRes });
       };
-      const out = steadyReadouts(presetDef, MATERIALS, { tol, onProgress });
+      const main = await solveDisplaySteady(presetDef, MATERIALS, { tol, onProgress });
+      const out = steadyReadouts(presetDef, MATERIALS, { tol, mainSolve: main });
 
       // harmonic solves per frequency (annual, diurnal). Tre/Tim ship as
       // transferable buffers; the UI superposes them for T(t) / amplitude /

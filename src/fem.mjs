@@ -454,6 +454,73 @@ export function assembleCSR(problem) {
   return { rowPtr, colIdx, vals, n: nNodes };
 }
 
+/**
+ * The IMAGINARY part of the harmonic operator as CSR: ωC on free×free nodes.
+ * Mirrors `assembleCSR` but with the capacity element matrices (`CeList`, same
+ * dedup table) scaled by ω, and NO Robin terms (the surface film H is real) — and
+ * crucially **non-free rows are empty**, because the identity that `applyAComplex`
+ * imposes on void/Dirichlet nodes is purely real (Im = 0). Paired with the real
+ * `assembleCSR`, a complex CSR matvec (csrSpMVComplex) reproduces
+ * `applyAComplex(p, ω)` to round-off (gate S2-G2.B-im). ω-dependent, so rebuilt
+ * per frequency.
+ *
+ * @returns {{rowPtr: Int32Array, colIdx: Int32Array, vals: Float64Array, n: number}}
+ */
+export function assembleCSRImag(problem, omega) {
+  const { grid, free, nNodes } = problem;
+  const { nx, ny, nz } = grid;
+  const sy = nx + 1;
+  const sz = (nx + 1) * (ny + 1);
+  const { CeList, cellElem } = ensureElemTables(problem);
+
+  const rows = new Array(nNodes).fill(null);
+  const rowOf = (n) => rows[n] ?? (rows[n] = new Map());
+  const idx = new Int32Array(8);
+  for (let k = 0; k < nz; k++) {
+    for (let j = 0; j < ny; j++) {
+      let c = nx * (j + ny * k);
+      let n0 = sy * j + sz * k;
+      for (let i = 0; i < nx; i++, c++, n0++) {
+        const e = cellElem[c];
+        if (e < 0) continue;
+        const Ce = CeList[e];
+        idx[0] = n0; idx[1] = n0 + 1;
+        idx[2] = n0 + sy; idx[3] = n0 + sy + 1;
+        idx[4] = n0 + sz; idx[5] = n0 + sz + 1;
+        idx[6] = n0 + sz + sy; idx[7] = n0 + sz + sy + 1;
+        for (let a = 0; a < 8; a++) {
+          const na = idx[a];
+          if (!free[na]) continue;
+          const row = rowOf(na);
+          const ra = a * 8;
+          for (let b = 0; b < 8; b++) {
+            const nb = idx[b];
+            if (!free[nb]) continue;
+            const v = omega * Ce[ra + b];
+            if (v !== 0) row.set(nb, (row.get(nb) ?? 0) + v);
+          }
+        }
+      }
+    }
+  }
+
+  const rowPtr = new Int32Array(nNodes + 1);
+  let nnz = 0;
+  for (let n = 0; n < nNodes; n++) nnz += (free[n] && rows[n]) ? rows[n].size : 0;
+  const colIdx = new Int32Array(nnz);
+  const vals = new Float64Array(nnz);
+  let p = 0;
+  for (let n = 0; n < nNodes; n++) {
+    rowPtr[n] = p;
+    if (free[n] && rows[n]) {
+      const cols = [...rows[n].keys()].sort((x, y) => x - y);
+      for (const cc of cols) { colIdx[p] = cc; vals[p] = rows[n].get(cc); p++; }
+    } // non-free (and capacity-free) rows stay empty: Im of the identity is 0
+  }
+  rowPtr[nNodes] = p;
+  return { rowPtr, colIdx, vals, n: nNodes };
+}
+
 // ====================================================================
 // M2 — complex operator (K + iωC + H) for the harmonic solve.
 // Fields are stored as separate re/im arrays (CLAUDE.md M2 decision). The

@@ -20,3 +20,20 @@ export function csrSpMV(csr, x, y) {
     y[r] = s;
   }
 }
+
+/**
+ * Complex CSR matvec (yRe, yIm) ← (Are + i·Aim)(xRe + i·xIm), the fp64 reference
+ * for the harmonic GPU solve. `csrRe = assembleCSR(p)` (K+H, identity rows),
+ * `csrIm = assembleCSRImag(p, ω)` (ωC, empty non-free rows). Reproduces
+ * `applyAComplex(p, ω)` (gate S2-G2.B-im).
+ *   yRe = Are·xRe − Aim·xIm,  yIm = Are·xIm + Aim·xRe.
+ */
+export function csrSpMVComplex(csrRe, csrIm, xRe, xIm, yRe, yIm) {
+  const n = csrRe.n;
+  const t1 = new Float64Array(n);
+  const t2 = new Float64Array(n);
+  csrSpMV(csrRe, xRe, t1); csrSpMV(csrIm, xIm, t2);
+  for (let i = 0; i < n; i++) yRe[i] = t1[i] - t2[i];
+  csrSpMV(csrRe, xIm, t1); csrSpMV(csrIm, xRe, t2);
+  for (let i = 0; i < n; i++) yIm[i] = t1[i] + t2[i];
+}

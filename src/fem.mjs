@@ -369,6 +369,91 @@ export function applyA(problem, x, y) {
   for (let n = 0; n < nNodes; n++) if (!free[n]) y[n] = x[n];
 }
 
+/**
+ * Assemble the SAME real operator `applyA` realises (K + H on free nodes,
+ * identity on void/Dirichlet) into an explicit CSR matrix — the form a GPU SpMV
+ * wants (race-free, one row per invocation). It is built from the identical
+ * deduplicated element table (`ensureElemTables`) and Robin faces that
+ * `scatterKH` uses, and applies the same free/free masking (non-free columns
+ * dropped on free rows; non-free rows are identity), so `csrSpMV(assembleCSR(p))`
+ * reproduces `applyA(p)` to summation round-off (gate S2-G2.B, < 1e-12).
+ * Columns within each row are sorted ascending → a fixed reduction order, which
+ * makes the eventual GPU SpMV run-to-run deterministic (serves the G-D gate).
+ *
+ * @returns {{rowPtr: Int32Array, colIdx: Int32Array, vals: Float64Array, n: number}}
+ */
+export function assembleCSR(problem) {
+  const { grid, robinFaces, free, nNodes } = problem;
+  const { nx, ny, nz } = grid;
+  const sy = nx + 1;
+  const sz = (nx + 1) * (ny + 1);
+  const { KeList, cellElem } = ensureElemTables(problem);
+
+  const rows = new Array(nNodes).fill(null); // free rows → Map(col → value)
+  const rowOf = (n) => rows[n] ?? (rows[n] = new Map());
+  const idx = new Int32Array(8);
+  for (let k = 0; k < nz; k++) {
+    for (let j = 0; j < ny; j++) {
+      let c = nx * (j + ny * k);
+      let n0 = sy * j + sz * k;
+      for (let i = 0; i < nx; i++, c++, n0++) {
+        const e = cellElem[c];
+        if (e < 0) continue; // void cell
+        const Ke = KeList[e];
+        idx[0] = n0; idx[1] = n0 + 1;
+        idx[2] = n0 + sy; idx[3] = n0 + sy + 1;
+        idx[4] = n0 + sz; idx[5] = n0 + sz + 1;
+        idx[6] = n0 + sz + sy; idx[7] = n0 + sz + sy + 1;
+        for (let a = 0; a < 8; a++) {
+          const na = idx[a];
+          if (!free[na]) continue; // free rows only
+          const row = rowOf(na);
+          const ra = a * 8;
+          for (let b = 0; b < 8; b++) {
+            const nb = idx[b];
+            if (!free[nb]) continue; // free columns only (matches applyA masking)
+            const v = Ke[ra + b];
+            if (v !== 0) row.set(nb, (row.get(nb) ?? 0) + v);
+          }
+        }
+      }
+    }
+  }
+  for (const f of robinFaces) {
+    const s = (f.h * f.area) / 36;
+    const n = f.nodes;
+    for (let a = 0; a < 4; a++) {
+      const na = n[a];
+      if (!free[na]) continue;
+      const row = rowOf(na);
+      const ra = a * 4;
+      for (let b = 0; b < 4; b++) {
+        const nb = n[b];
+        if (!free[nb]) continue;
+        row.set(nb, (row.get(nb) ?? 0) + s * FACE_P[ra + b]);
+      }
+    }
+  }
+
+  const rowPtr = new Int32Array(nNodes + 1);
+  let nnz = 0;
+  for (let n = 0; n < nNodes; n++) nnz += free[n] ? (rows[n] ? rows[n].size : 0) : 1;
+  const colIdx = new Int32Array(nnz);
+  const vals = new Float64Array(nnz);
+  let p = 0;
+  for (let n = 0; n < nNodes; n++) {
+    rowPtr[n] = p;
+    if (free[n]) {
+      const cols = [...rows[n].keys()].sort((x, y) => x - y); // ascending → deterministic
+      for (const cc of cols) { colIdx[p] = cc; vals[p] = rows[n].get(cc); p++; }
+    } else {
+      colIdx[p] = n; vals[p] = 1; p++; // identity row
+    }
+  }
+  rowPtr[nNodes] = p;
+  return { rowPtr, colIdx, vals, n: nNodes };
+}
+
 // ====================================================================
 // M2 — complex operator (K + iωC + H) for the harmonic solve.
 // Fields are stored as separate re/im arrays (CLAUDE.md M2 decision). The

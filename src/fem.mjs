@@ -314,20 +314,23 @@ export function assemble(grid, painted, materials, bcs) {
 
 /** y += (K + H)·x, no masking — shared by applyA and Dirichlet elimination. */
 function scatterKH(problem, x, y) {
-  const { grid, cellLambda, robinFaces } = problem;
-  const { nx, ny, nz, dx, dy, dz } = grid;
+  const { grid, robinFaces } = problem;
+  const { nx, ny, nz } = grid;
   const sy = nx + 1;
   const sz = (nx + 1) * (ny + 1);
-  const Ke = new Float64Array(64);
+  // Reuse the deduplicated element table (same one the COCG matvec uses) so the
+  // 8×8 Ke is built once per element type, not rebuilt for every cell on every
+  // matvec — this is the per-iteration hot loop of the steady solve.
+  const { KeList, cellElem } = ensureElemTables(problem);
   const idx = new Int32Array(8);
   for (let k = 0; k < nz; k++) {
     for (let j = 0; j < ny; j++) {
       let c = nx * (j + ny * k);
       let n0 = sy * j + sz * k;
       for (let i = 0; i < nx; i++, c++, n0++) {
-        const lam = cellLambda[c];
-        if (lam === 0) continue;
-        elementK(dx[i], dy[j], dz[k], lam, Ke);
+        const e = cellElem[c];
+        if (e < 0) continue; // void cell
+        const Ke = KeList[e];
         idx[0] = n0; idx[1] = n0 + 1;
         idx[2] = n0 + sy; idx[3] = n0 + sy + 1;
         idx[4] = n0 + sz; idx[5] = n0 + sz + 1;

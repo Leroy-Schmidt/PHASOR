@@ -91,6 +91,20 @@ test('corner2d: both legs painted, insulation wraps the outer corner', () => {
   assert.equal(painted.matIds[painted.cells[0]], 'eps');
 });
 
+test('mine: branching tunnels carve air voids in soil; walls are facesInside Robin', () => {
+  // tiny/coarse build — exercises the generator + painter, not a solve
+  const preset = presets.mine({ W: 12, H: 10, D: 12, depthY: 6, levels: 2, len0: 3, wid0: 1.2, shaftW: 1.2, maxH: 0.8 });
+  const { painted } = paintPreset(preset);
+  const counts = countByMaterial(painted);
+  assert.ok(counts.soil > 0, 'soil must be painted');
+  assert.ok(counts.air > 0, 'tunnels must carve air voids');
+  assert.ok(preset.boxes.filter((b) => b.material === 'air').length >= 3,
+    'branching should produce a shaft plus multiple galleries');
+  const interior = preset.bcs.find((b) => b.name === 'interior');
+  assert.equal(interior.type, 'robin');
+  assert.deepEqual(interior.select, { facesInside: true });
+});
+
 test('corner2d: grading refines toward the interior corner', () => {
   const preset = presets.corner2d();
   const grid = buildGrid(preset.gridSpec);

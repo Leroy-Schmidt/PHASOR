@@ -392,6 +392,72 @@ export function basement3d({
   };
 }
 
+/**
+ * `mine` — a semi-fractal branching tunnel network (S2-M2.2 capability showcase /
+ * stress test). A vertical shaft from the surface bifurcates `levels` times into
+ * ever-shorter perpendicular galleries (axis-aligned, alternating x/z), all carved
+ * as air VOIDS in a soil block. The tunnel walls are flushed with surface air, so
+ * `facesInside` selects them for a Robin BC carrying the annual climate swing — the
+ * galleries act as thermal antennae conducting the surface season deep underground.
+ *
+ * NOT a building-physics preset: there is no f_Rsi (no heated room). Its purpose is
+ * to prove the engine + WebGPU solver handle a large, irregular, multi-Robin domain
+ * in acceptable time. The default `maxH` is intentionally fine (~500k nodes, ~1 min
+ * full re-solve) — raise `maxH` for a quick look, lower it to push the solver. Deep
+ * boundary is a mild geothermal Dirichlet (above the annual mean) so the steady
+ * field shows a real gradient rather than a uniform one.
+ */
+export function mine({
+  W = 28, H = 18, D = 28, depthY = 11, shaftW = 1.4,
+  levels = 4, len0 = 7, wid0 = 1.5, shrink = 0.6, maxH = 0.5, deepT = 12,
+} = {}) {
+  const boxes = [{ name: 'soil', x: [0, W], y: [0, H], z: [0, D], material: 'soil' }];
+  const mx = new Set([0, W]); const my = new Set([0, H]); const mz = new Set([0, D]);
+  let id = 0;
+  const tunnel = (x0, x1, y0, y1, z0, z1) => {
+    x0 = Math.max(0, x0); x1 = Math.min(W, x1); y0 = Math.max(0, y0); y1 = Math.min(H, y1); z0 = Math.max(0, z0); z1 = Math.min(D, z1);
+    if (x1 - x0 < 1e-6 || y1 - y0 < 1e-6 || z1 - z0 < 1e-6) return;
+    boxes.push({ name: `tunnel_${id++}`, x: [x0, x1], y: [y0, y1], z: [z0, z1], material: 'air' });
+    mx.add(x0); mx.add(x1); my.add(y0); my.add(y1); mz.add(z0); mz.add(z1);
+  };
+  const cx = W / 2; const cz = D / 2;
+  tunnel(cx - shaftW / 2, cx + shaftW / 2, depthY, H, cz - shaftW / 2, cz + shaftW / 2); // vertical shaft
+  const branch = (x, z, len, wid, axis, depth) => {
+    if (depth <= 0 || len < wid) return;
+    const y0 = depthY - wid; const y1 = depthY;
+    if (axis === 'x') {
+      tunnel(x - len, x + len, y0, y1, z - wid / 2, z + wid / 2);
+      branch(x - len, z, len * shrink, wid * shrink, 'z', depth - 1);
+      branch(x + len, z, len * shrink, wid * shrink, 'z', depth - 1);
+    } else {
+      tunnel(x - wid / 2, x + wid / 2, y0, y1, z - len, z + len);
+      branch(x, z - len, len * shrink, wid * shrink, 'x', depth - 1);
+      branch(x, z + len, len * shrink, wid * shrink, 'x', depth - 1);
+    }
+  };
+  branch(cx, cz, len0, wid0, 'x', levels);
+  const sorted = (s) => [...s].sort((a, b) => a - b);
+  // surface air (annual swing only — the diurnal wave barely penetrates a deep mine)
+  const surfaceAir = { h: 25, T: { mean: CLIMATE.external.T.mean, harmonics: [CLIMATE.external.T.harmonics[0]] } };
+  return {
+    name: 'mine',
+    boxes,
+    background: 'air',
+    bcs: [
+      { name: 'interior', select: { facesInside: true }, type: 'robin', ...surfaceAir }, // tunnel walls
+      { name: 'exterior', select: { axis: 'y', side: 'max' }, type: 'robin', ...surfaceAir }, // ground surface
+      { name: 'deep', select: { axis: 'y', side: 'min' }, type: 'dirichlet', value: deepT },
+      { name: 'cuts', select: 'rest', type: 'adiabatic' }, // far soil sides
+    ],
+    gridSpec: {
+      x: { mandatory: sorted(mx), maxH },
+      y: { mandatory: sorted(my), maxH },
+      z: { mandatory: sorted(mz), maxH },
+    },
+    extent: { x: [0, W], y: [0, H], z: [0, D] },
+  };
+}
+
 export const presets = {
-  wall1d, corner2d, slab_junction, basement, basement_air, basement3d, soil_rod,
+  wall1d, corner2d, slab_junction, basement, basement_air, basement3d, soil_rod, mine,
 };

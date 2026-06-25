@@ -134,6 +134,36 @@ const K_BETA = /* wgsl */`
 @compute @workgroup_size(1)
 fn main() { let old = rz[0]; let rn = rzNew[0]; beta[0] = select(0.0, rn / old, old != 0.0); rz[0] = rn; }`;
 
+// FUSED kernels (S2-M2.2 fusion): cut ~3 dispatches/iter in the steady CG.
+// fused CG vector update: x += s·p ; r −= s·Ap (one dispatch, was two)
+const K_XRUPD = /* wgsl */`
+@group(0) @binding(0) var<storage, read_write> x : array<f32>;
+@group(0) @binding(1) var<storage, read_write> r : array<f32>;
+@group(0) @binding(2) var<storage, read> p : array<f32>;
+@group(0) @binding(3) var<storage, read> ap : array<f32>;
+@group(0) @binding(4) var<storage, read> s : array<f32>;
+@group(0) @binding(5) var<uniform> N : u32;
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) g:vec3<u32>){ let i=g.x; if(i>=N){return;} let a=s[0]; x[i]=x[i]+a*p[i]; r[i]=r[i]-a*ap[i]; }`;
+
+// fused dual dot: partials for Σ r·z (→ rzNew) and Σ r·r (→ residual) in one pass
+const K_DOT2 = /* wgsl */`
+@group(0) @binding(0) var<storage, read> r : array<f32>;
+@group(0) @binding(1) var<storage, read> z : array<f32>;
+@group(0) @binding(2) var<storage, read_write> pRz : array<f32>;
+@group(0) @binding(3) var<storage, read_write> pRr : array<f32>;
+@group(0) @binding(4) var<uniform> N : u32;
+var<workgroup> s1 : array<f32, ${WG}>;
+var<workgroup> s2 : array<f32, ${WG}>;
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid:vec3<u32>, @builtin(local_invocation_id) lid:vec3<u32>, @builtin(workgroup_id) wid:vec3<u32>){
+  let i=gid.x; var v1=0.0; var v2=0.0; if(i<N){ let rv=r[i]; v1=rv*z[i]; v2=rv*rv; }
+  s1[lid.x]=v1; s2[lid.x]=v2; workgroupBarrier();
+  var stride:u32=${HALF}u;
+  loop{ if(stride==0u){break;} if(lid.x<stride){ s1[lid.x]=s1[lid.x]+s1[lid.x+stride]; s2[lid.x]=s2[lid.x]+s2[lid.x+stride]; } workgroupBarrier(); stride=stride/2u; }
+  if(lid.x==0u){ pRz[wid.x]=s1[0]; pRr[wid.x]=s2[0]; }
+}`;
+
 // ----------------------------------------------------------------- helpers
 const STORAGE = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
 const UNIFORM = GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST;
@@ -172,15 +202,15 @@ export async function gpuSolveSteady(problem, { tol = 1e-5, maxIter = 4000 } = {
   const gB = F(n); device.queue.writeBuffer(gB, 0, Float32Array.from(problem.b));
   const gDiagInv = F(n); device.queue.writeBuffer(gDiagInv, 0, diagInvF);
   const gX = F(n); device.queue.writeBuffer(gX, 0, Float32Array.from(problem.x0));
-  const gR = F(n), gZ = F(n), gP = F(n), gAp = F(n), gPart = F(numWG);
-  const sRz = F(1), sPap = F(1), sRzNew = F(1), sRr = F(1), sAlpha = F(1), sBeta = F(1), sBnorm = F(1);
+  const gR = F(n), gZ = F(n), gP = F(n), gAp = F(n), gPart = F(numWG), gPartA = F(numWG), gPartB = F(numWG);
+  const sRz = F(1), sPap = F(1), sDots = F(2), sAlpha = F(1), sBeta = F(1), sBnorm = F(1);
   const uN = u32buf(device, n);
   const uNumWG = u32buf(device, numWG);
 
   const pipe = (code) => device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'main' } });
-  const pSpmv = pipe(K_SPMV), pSub = pipe(K_SUB), pMul = pipe(K_MUL),
-    pAxpy = pipe(K_AXPY), pAxmy = pipe(K_AXMY), pXpby = pipe(K_XPBY),
-    pDot = pipe(K_DOT), pRed = pipe(K_REDUCE), pAlpha = pipe(K_ALPHA), pBeta = pipe(K_BETA);
+  const pSpmv = pipe(K_SPMV), pSub = pipe(K_SUB), pMul = pipe(K_MUL), pXpby = pipe(K_XPBY),
+    pXru = pipe(K_XRUPD), pDot = pipe(K_DOT), pDot2 = pipe(K_DOT2), pRed = pipe(K_REDUCE),
+    pRed2 = pipe(K_REDUCE2), pAlpha = pipe(K_ALPHA), pBeta = pipe(K_BETA);
 
   const bg = (pipeline, bufs) => device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
@@ -190,31 +220,33 @@ export async function gpuSolveSteady(problem, { tol = 1e-5, maxIter = 4000 } = {
   const bgSpmvP = bg(pSpmv, [gRowPtr, gColIdx, gVals, gP, gAp, uN]);
   const bgSubR = bg(pSub, [gR, gB, gAp, uN]);          // r = b - Ap
   const bgMulZ = bg(pMul, [gZ, gR, gDiagInv, uN]);     // z = r .* diagInv
-  const bgAxpyX = bg(pAxpy, [gX, gP, sAlpha, uN]);     // x += alpha p
-  const bgAxmyR = bg(pAxmy, [gR, gAp, sAlpha, uN]);    // r -= alpha Ap
-  const bgXpbyP = bg(pXpby, [gP, gZ, sBeta, uN]);      // p = z + beta p
+  const bgXru = bg(pXru, [gX, gR, gP, gAp, sAlpha, uN]); // x += a p ; r -= a Ap (fused)
+  const bgXpbyP = bg(pXpby, [gP, gZ, sBeta, uN]);        // p = z + beta p
   const bgDotRZ = bg(pDot, [gR, gZ, gPart, uN]);
   const bgDotPAp = bg(pDot, [gP, gAp, gPart, uN]);
-  const bgDotRR = bg(pDot, [gR, gR, gPart, uN]);
   const bgDotBB = bg(pDot, [gB, gB, gPart, uN]);
+  const bgDot2 = bg(pDot2, [gR, gZ, gPartA, gPartB, uN]); // partials for r·z and r·r
   const bgRedRZ = bg(pRed, [gPart, sRz, uNumWG]);
   const bgRedPAp = bg(pRed, [gPart, sPap, uNumWG]);
-  const bgRedRZNew = bg(pRed, [gPart, sRzNew, uNumWG]);
-  const bgRedRR = bg(pRed, [gPart, sRr, uNumWG]);
   const bgRedBB = bg(pRed, [gPart, sBnorm, uNumWG]);
+  const bgRed2 = bg(pRed2, [gPartA, gPartB, sDots, uNumWG]); // sDots = [Σr·z, Σr·r]
   const bgAlpha = bg(pAlpha, [sRz, sPap, sAlpha]);
-  const bgBeta = bg(pBeta, [sRz, sRzNew, sBeta]);
+  const bgBeta = bg(pBeta, [sRz, sDots, sBeta]);          // beta = sDots[0]/rz ; rz <- sDots[0]
 
   const vec = (pass, pipeline, group) => { pass.setPipeline(pipeline); pass.setBindGroup(0, group); pass.dispatchWorkgroups(vWG); };
   const dot = (pass, bgPair, bgOut) => {
     pass.setPipeline(pDot); pass.setBindGroup(0, bgPair); pass.dispatchWorkgroups(numWG);
     pass.setPipeline(pRed); pass.setBindGroup(0, bgOut); pass.dispatchWorkgroups(1);
   };
+  const dot2 = (pass) => { // fused: [Σr·z, Σr·r] → sDots
+    pass.setPipeline(pDot2); pass.setBindGroup(0, bgDot2); pass.dispatchWorkgroups(numWG);
+    pass.setPipeline(pRed2); pass.setBindGroup(0, bgRed2); pass.dispatchWorkgroups(1);
+  };
 
   const staging = device.createBuffer({ size: 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-  async function readScalar(src) {
+  async function readScalar(src, off = 0) {
     const enc = device.createCommandEncoder();
-    enc.copyBufferToBuffer(src, 0, staging, 0, 4);
+    enc.copyBufferToBuffer(src, off, staging, 0, 4);
     device.queue.submit([enc.finish()]);
     await staging.mapAsync(GPUMapMode.READ);
     const v = new Float32Array(staging.getMappedRange().slice(0))[0];
@@ -245,11 +277,9 @@ export async function gpuSolveSteady(problem, { tol = 1e-5, maxIter = 4000 } = {
     pass.setPipeline(pSpmv); pass.setBindGroup(0, bgSpmvP); pass.dispatchWorkgroups(vWG); // Ap = A p
     dot(pass, bgDotPAp, bgRedPAp);                              // pap = p·Ap
     pass.setPipeline(pAlpha); pass.setBindGroup(0, bgAlpha); pass.dispatchWorkgroups(1);  // alpha = rz/pap
-    vec(pass, pAxpy, bgAxpyX);                                  // x += alpha p
-    vec(pass, pAxmy, bgAxmyR);                                  // r -= alpha Ap
+    vec(pass, pXru, bgXru);                                     // x += a p ; r -= a Ap (fused)
     vec(pass, pMul, bgMulZ);                                    // z = r.*diagInv
-    dot(pass, bgDotRZ, bgRedRZNew);                            // rzNew = r·z
-    dot(pass, bgDotRR, bgRedRR);                               // rr = r·r
+    dot2(pass);                                                // sDots = [rzNew, rr] (fused)
     pass.setPipeline(pBeta); pass.setBindGroup(0, bgBeta); pass.dispatchWorkgroups(1);    // beta; rz<-rzNew
     vec(pass, pXpby, bgXpbyP);                                  // p = z + beta p
   };
@@ -266,7 +296,7 @@ export async function gpuSolveSteady(problem, { tol = 1e-5, maxIter = 4000 } = {
     device.queue.submit([enc.finish()]);
     iter += chunk;
 
-    const rr = await readScalar(sRr); // residual after the last iter of the batch
+    const rr = await readScalar(sDots, 4); // sDots[1] = r·r after the batch's last iter
     relRes = Math.sqrt(Math.max(rr, 0)) / bnorm;
     if (relRes < best * (1 - 1e-3)) { best = relRes; stall = 0; } else { stall++; }
     if (relRes <= tol || stall >= 3 || !Number.isFinite(relRes)) break;
@@ -282,8 +312,8 @@ export async function gpuSolveSteady(problem, { tol = 1e-5, maxIter = 4000 } = {
   const x = Float64Array.from(new Float32Array(xStaging.getMappedRange().slice(0)));
   xStaging.unmap();
 
-  for (const b of [gRowPtr, gColIdx, gVals, gB, gDiagInv, gX, gR, gZ, gP, gAp, gPart,
-    sRz, sPap, sRzNew, sRr, sAlpha, sBeta, sBnorm, uN, uNumWG, staging, xStaging]) b.destroy();
+  for (const b of [gRowPtr, gColIdx, gVals, gB, gDiagInv, gX, gR, gZ, gP, gAp, gPart, gPartA, gPartB,
+    sRz, sPap, sDots, sAlpha, sBeta, sBnorm, uN, uNumWG, staging, xStaging]) b.destroy();
 
   return { x, iterations: iter, relRes, converged: relRes <= tol };
 }
@@ -404,6 +434,23 @@ const K_CAXPY = csaxpy('ar[i]=ar[i]+(s0*br[i]-s1*bi[i]); ai[i]=ai[i]+(s0*bi[i]+s
 const K_CAXMY = csaxpy('ar[i]=ar[i]-(s0*br[i]-s1*bi[i]); ai[i]=ai[i]-(s0*bi[i]+s1*br[i]);'); // r -= alpha q
 const K_CXPBY = csaxpy('let or=ar[i]; let oi=ai[i]; ar[i]=br[i]+(s0*or-s1*oi); ai[i]=bi[i]+(s0*oi+s1*or);'); // p = z + beta p
 
+// fused complex CG update: x += s·p ; r −= s·q (one dispatch, was caxpy+caxmy)
+const K_CXRUPD = /* wgsl */`
+@group(0) @binding(0) var<storage, read_write> xr : array<f32>;
+@group(0) @binding(1) var<storage, read_write> xi : array<f32>;
+@group(0) @binding(2) var<storage, read_write> rr : array<f32>;
+@group(0) @binding(3) var<storage, read_write> ri : array<f32>;
+@group(0) @binding(4) var<storage, read> pr : array<f32>;
+@group(0) @binding(5) var<storage, read> pi : array<f32>;
+@group(0) @binding(6) var<storage, read> qr : array<f32>;
+@group(0) @binding(7) var<storage, read> qi : array<f32>;
+@group(0) @binding(8) var<storage, read> s : array<f32>;
+@group(0) @binding(9) var<uniform> N : u32;
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) g:vec3<u32>){ let i=g.x; if(i>=N){return;} let s0=s[0]; let s1=s[1];
+  xr[i]=xr[i]+(s0*pr[i]-s1*pi[i]); xi[i]=xi[i]+(s0*pi[i]+s1*pr[i]);
+  rr[i]=rr[i]-(s0*qr[i]-s1*qi[i]); ri[i]=ri[i]-(s0*qi[i]+s1*qr[i]); }`;
+
 // complex divide out = a / b   (a,b,out are length-2 [re,im])
 const K_CDIV = /* wgsl */`
 @group(0) @binding(0) var<storage, read> a : array<f32>;
@@ -461,7 +508,7 @@ export async function gpuSolveHarmonic(problem, omega, { bRe, bIm, diagRe, diagI
 
   const pipe = (code) => device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'main' } });
   const pSpmv = pipe(K_SPMV_C), pBil = pipe(K_BILIN), pRed2 = pipe(K_REDUCE2), pNorm = pipe(K_NORM2),
-    pPrec = pipe(K_CPREC), pAxpy = pipe(K_CAXPY), pAxmy = pipe(K_CAXMY), pXpby = pipe(K_CXPBY),
+    pPrec = pipe(K_CPREC), pAxmy = pipe(K_CAXMY), pXru = pipe(K_CXRUPD), pXpby = pipe(K_CXPBY),
     pDiv = pipe(K_CDIV), pBeta = pipe(K_CBETA), pRed1 = pipe(K_REDUCE);
 
   const bg = (pl, bufs) => device.createBindGroup({ layout: pl.getBindGroupLayout(0), entries: bufs.map((b, i) => ({ binding: i, resource: { buffer: b } })) });
@@ -478,8 +525,8 @@ export async function gpuSolveHarmonic(problem, omega, { bRe, bIm, diagRe, diagI
   const bgRedBB = bg(pRed1, [gPart, sBn, uNumWG]);
   const bgRedRR = bg(pRed1, [gPart, sRr, uNumWG]);
   const bgAlpha = bg(pDiv, [sRz, sPq, sAlpha]);
-  const bgAxpyX = bg(pAxpy, [gXr, gXi, gPr, gPi, sAlpha, uN]);
-  const bgAxmyR = bg(pAxmy, [gRr, gRi, gQr, gQi, sAlpha, uN]);
+  const bgAxmyR = bg(pAxmy, [gRr, gRi, gQr, gQi, sAlpha, uN]); // preamble r = b − q
+  const bgXru = bg(pXru, [gXr, gXi, gRr, gRi, gPr, gPi, gQr, gQi, sAlpha, uN]); // fused x+=αp ; r-=αq
   const bgBeta = bg(pBeta, [sRz, sRzN, sBeta]);
   const bgXpbyP = bg(pXpby, [gPr, gPi, gZr, gZi, sBeta, uN]);
 
@@ -524,8 +571,7 @@ export async function gpuSolveHarmonic(problem, omega, { bRe, bIm, diagRe, diagI
     pass.setPipeline(pSpmv); pass.setBindGroup(0, bgSpmvP); pass.dispatchWorkgroups(vWG); // q = A p
     bil(pass, bgBilPQ, bgRed2PQ);                       // pq = p·q (bilinear)
     pass.setPipeline(pDiv); pass.setBindGroup(0, bgAlpha); pass.dispatchWorkgroups(1);    // alpha = rz/pq
-    vec(pass, pAxpy, bgAxpyX);                           // x += alpha p
-    vec(pass, pAxmy, bgAxmyR);                           // r -= alpha q
+    vec(pass, pXru, bgXru);                              // x += alpha p ; r -= alpha q (fused)
     vec(pass, pPrec, bgPrec);                            // z = M⁻¹ r
     bil(pass, bgBilRZ, bgRed2RZN);                      // rzNew = r·z
     norm(pass, bgNormRR, bgRedRR);                      // ‖r‖²

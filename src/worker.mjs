@@ -119,14 +119,14 @@ function bcMean(bcs, name) {
  * solve with R_si = 0.25 for f_Rsi (DIN 4108-2 — convention fixed in
  * CLAUDE.md M1). ψ only for presets that declare psiSpec (extruded junctions).
  */
-export function steadyReadouts(presetDef, materials, { tol = 1e-10, maxIter = 20000, onProgress, mainSolve } = {}) {
+export function steadyReadouts(presetDef, materials, { tol = 1e-10, maxIter = 20000, onProgress, mainSolve, sol25Solve } = {}) {
   const main = mainSolve ?? solveSteady(presetDef, materials, { tol, maxIter, onProgress });
   const flux = boundaryFlux(main.problem, main.T);
 
   const RsiFixed = 0.25;
   const bcs25 = presetDef.bcs.map((bc) =>
     bc.name === 'interior' ? { ...bc, h: 1 / RsiFixed } : bc);
-  const sol25 = solveSteady(presetDef, materials, { tol, maxIter, bcs: bcs25 });
+  const sol25 = sol25Solve ?? solveSteady(presetDef, materials, { tol, maxIter, bcs: bcs25 });
 
   const Ti = bcMean(presetDef.bcs, 'interior');
   const Te = bcMean(presetDef.bcs, 'exterior');
@@ -205,10 +205,10 @@ const GPU_MIN_NODES = 20000;
  * node never imports the GPU module (dynamic import, guarded by `navigator.gpu`),
  * so `webgpu.mjs`'s top-level `GPUBufferUsage` reference never trips `node --test`.
  */
-async function solveDisplaySteady(presetDef, materials, { tol = 1e-10, maxIter = 20000, onProgress } = {}) {
+async function solveDisplaySteady(presetDef, materials, { tol = 1e-10, maxIter = 20000, onProgress, bcs } = {}) {
   const grid = buildGrid(presetDef.gridSpec);
   const painted = paintBoxes(grid, presetDef.boxes, presetDef.background);
-  const problem = assemble(grid, painted, materials, presetDef.bcs);
+  const problem = assemble(grid, painted, materials, bcs ?? presetDef.bcs);
   if (typeof navigator !== 'undefined' && navigator.gpu && problem.nNodes >= GPU_MIN_NODES) {
     try {
       const { gpuSolveSteady } = await import('./gpu/webgpu.mjs');
@@ -269,8 +269,12 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
       const onProgress = (iter, relRes) => {
         if (iter % 25 === 0) self.postMessage({ id, type: 'progress', iter, relRes });
       };
+      // both steady solves on GPU (display R_si=0.13 + the R_si=0.25 f_Rsi solve,
+      // each ~a third of the pipeline) — injected so steadyReadouts re-solves neither.
+      const bcs25 = presetDef.bcs.map((bc) => (bc.name === 'interior' ? { ...bc, h: 1 / 0.25 } : bc));
       const main = await solveDisplaySteady(presetDef, MATERIALS, { tol, onProgress });
-      const out = steadyReadouts(presetDef, MATERIALS, { tol, mainSolve: main });
+      const sol25 = await solveDisplaySteady(presetDef, MATERIALS, { tol, bcs: bcs25 });
+      const out = steadyReadouts(presetDef, MATERIALS, { tol, mainSolve: main, sol25Solve: sol25 });
 
       // harmonic solves per frequency (annual, diurnal). Tre/Tim ship as
       // transferable buffers; the UI superposes them for T(t) / amplitude /

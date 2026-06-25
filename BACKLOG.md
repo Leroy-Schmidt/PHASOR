@@ -8,6 +8,16 @@ tagged `→ ROADMAP S2-Mx` below; everything else is still raw parking lot. This
 keeps the backlog from rotting into a dumping ground — `ROADMAP.md` is the
 sequenced, gated plan; this file is the unsorted pool it draws from.
 
+- 2026-06-24 — **Year-sweep diurnal aliasing (M1 viz, Operator-flagged 2026-06-24).**
+  The T(t) animation reconstructs `mean + Σ Re(T̂_k e^{iω_k t})` with ALL harmonics
+  at `t = frac·period`. In **year mode** (`period = 31_557_600 s`, slider step 0.001
+  → Δt ≈ 8.77 h) the 24-h diurnal term is sampled near Nyquist and folds into a
+  spurious slow beat ("several waves per year" overlaid on the annual). The diurnal
+  *solve* is correct (GPU==CPU, amp 3.1 °C) — this is purely a viz/sampling artifact,
+  pre-existing (unrelated to the S2-M2 GPU work). **Fix:** reconstruct with annual-only
+  in year mode (drop sub-day harmonics whose period ≪ the sweep step); keep all
+  harmonics in day mode. Touches the field reconstruction in `slices`/`probe`/`loss`
+  (`setTime`), threading the sweep `mode` through. Small, isolated.
 - 2026-06-12 — Mesh quality (M1+): corner2d grading refines along each axis
   toward the inner corner, but cells along the outer→inner corner *diagonal*
   stay relatively coarse — exactly where the re-entrant cold spot / isotherm

@@ -437,8 +437,10 @@ export function mine({
   };
   branch(cx, cz, len0, wid0, 'x', levels);
   const sorted = (s) => [...s].sort((a, b) => a - b);
-  // surface air (annual swing only — the diurnal wave barely penetrates a deep mine)
-  const surfaceAir = { h: 25, T: { mean: CLIMATE.external.T.mean, harmonics: [CLIMATE.external.T.harmonics[0]] } };
+  // tunnels + ground are flushed with the full surface air (annual + diurnal). The
+  // diurnal wave only reaches the surface and upper shaft (δ_diurnal ≈ 0.15 m), but
+  // it must be present for the daily T(t) animation to show that near-surface twitch.
+  const surfaceAir = CLIMATE.external;
   return {
     name: 'mine',
     boxes,

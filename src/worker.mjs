@@ -225,6 +225,40 @@ async function solveDisplaySteady(presetDef, materials, { tol = 1e-10, maxIter =
   return { grid, painted, problem, T, iterations, relRes, converged, backend: 'cpu' };
 }
 
+/**
+ * The display harmonic solve for one frequency, GPU-accelerated when worthwhile.
+ * Mirrors `solveHarmonic` (dirichlet='zero' convention) but routes the COCG to the
+ * fp32 GPU-resident solver (tol 1e-4 — amplitude/phase to ~1e-3, past what's
+ * physically meaningful; fp32 COCG has no breakdown per the H0 probe) when WebGPU
+ * is present and the problem is large enough, with CPU `cocg` fallback. Returns
+ * the same shape as `solveHarmonic`. Browser/Worker-only (dynamic GPU import).
+ */
+async function solveDisplayHarmonic(presetDef, materials, omega, { tol = 1e-8 } = {}) {
+  const grid = buildGrid(presetDef.gridSpec);
+  const painted = paintBoxes(grid, presetDef.boxes, presetDef.background);
+  const problem = assemble(grid, painted, materials, presetDef.bcs);
+  const n = problem.nNodes;
+  const ambientByRegion = climateAmbient(presetDef.bcs, omega);
+  const { bRe, bIm } = assembleHarmonicLoad(problem, omega, ambientByRegion,
+    { dirichletRe: new Float64Array(n), dirichletIm: new Float64Array(n) });
+  const diagIm = new Float64Array(n);
+  for (let i = 0; i < n; i++) diagIm[i] = problem.free[i] ? omega * problem.diagC[i] : 0;
+  if (typeof navigator !== 'undefined' && navigator.gpu && n >= GPU_MIN_NODES) {
+    try {
+      const { gpuSolveHarmonic } = await import('./gpu/webgpu.mjs');
+      const r = await gpuSolveHarmonic(problem, omega, { bRe, bIm, diagRe: problem.diag, diagIm, tol: 1e-4 });
+      if (r.converged) {
+        return { grid, painted, problem, omega, Tre: r.xRe, Tim: r.xIm, iterations: r.iterations, relRes: r.relRes, converged: true, backend: 'gpu' };
+      }
+    } catch { /* WebGPU absent/failed/limited → CPU fallback */ }
+  }
+  const { xRe: Tre, xIm: Tim, iterations, relRes, converged } = cocg({
+    apply: (xr, xi, yr, yi) => applyAComplex(problem, omega, xr, xi, yr, yi),
+    bRe, bIm, diagRe: problem.diag, diagIm, tol, maxIter: 20000,
+  });
+  return { grid, painted, problem, omega, Tre, Tim, iterations, relRes, converged, backend: 'cpu' };
+}
+
 // --------------------------------------------------------- worker wiring
 // `self` exists in a Worker scope but not under plain node (`node --test`).
 if (typeof self !== 'undefined' && typeof window === 'undefined') {
@@ -257,7 +291,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
       for (const f of ['annual', 'diurnal']) {
         const omega = OMEGA_BY_FREQ[f];
         self.postMessage({ id, type: 'progress', iter: 0, relRes: NaN, phase: f });
-        const h = solveHarmonic(presetDef, MATERIALS, { omega, tol });
+        const h = await solveDisplayHarmonic(presetDef, MATERIALS, omega, { tol });
         const extHarm = (extBc?.T?.harmonics ?? []).find((hh) => hh.f === f);
         const ref = extHarm ? climatePhasor(extHarm, omega) : { re: 1, im: 0 };
         if (hasInterior) {
